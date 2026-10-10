@@ -156,3 +156,23 @@ async def test_restart_changed_delivery_or_instance_fences_old_observation_and_o
         assert db.execute("SELECT count(*) FROM observations").fetchone()[0]==1
         assert db.execute("SELECT count(*) FROM audit WHERE kind='old-result-ignored'").fetchone()[0]==1
         assert db.execute("SELECT count(*) FROM audit WHERE kind='old-outbox-ignored'").fetchone()[0]==1
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("deliver",["none","first","both"])
+async def test_same_attempt_regrade_recurrence_after_restart_is_latest_revision(setup,deliver):
+    store,student,_,assignments,grades,ags=setup
+    row=await assignments.request(student,"exr-essay-a","a")
+    a=result(row,student["uid"],(1,0,0));b=result(row,student["uid"],(1,1,0))
+    first=grades.observe(row,a)
+    if deliver!="none":await grades.drain()
+    grades.observe(row,b)
+    if deliver=="both":await grades.drain()
+    resumed=Grades(Store(store.path),assignments,ags,clock=lambda:1000)
+    last=resumed.observe(row,a)
+    assert last["timestamp"]>first["timestamp"]
+    assert resumed.observe(row,a)==last  # Consecutive identical polls are stable.
+    await resumed.drain();await resumed.drain()
+    assert [sent[1]["scoreGiven"] for sent in ags.sent]=={"none":[1],"first":[1,1],"both":[1,2,1]}[deliver]
+    assert len({sent[2] for sent in ags.sent})==len(ags.sent)
+    assert assignments.current(student)["state"]=="assigned"
+    with store.connect() as db:assert db.execute("SELECT count(*) FROM observations").fetchone()[0]==3

@@ -27,9 +27,11 @@ assignment/version and includes native scoreGiven/scoreMaximum from the current
 attempt. These declared aggregate points preserve native weighting (for example
 6/8), while per-question scope/completion are still independently validated.
 
-Events are keyed by canonical trusted evidence, sorted qualified questions and,
-for labs, the fixed activity. Observation and outbox insertion share a SQLite
-transaction. Duplicate evidence does not create another delivery. Each outbox row
+Events bind canonical trusted evidence, sorted qualified questions, the fixed
+assignment/activity scope and the preceding persistent revision. Observation and
+outbox insertion share a SQLite transaction. Consecutive identical polls reuse the
+committed event and payload; a legitimate A→B→A regrade creates a new revision even
+though its final content appeared earlier. Each outbox row
 persists user, activity/context, lineitem, delivery/version, payload and timestamp.
 New payload timestamps are monotonic per user/lineitem even within one polling
 second and remain identical on transport retry.
@@ -37,6 +39,10 @@ second and remain identical on transport retry.
 Before claiming an event, the worker rechecks the current assignment/delivery and
 latest observed attempt/revision. Old assignment/delivery/attempt events become
 obsolete, with audit, and cannot overwrite newer scores after a delayed retry.
+Both persisted rows and evidence must match the service's currently configured
+delivery and instance; a restart with a different delivery cannot send old queued
+grades before explicit migration. Successful regrades below the pass threshold
+restore the assignment's assigned/approved state instead of retaining completed.
 An expiring persistent send lease permits restart recovery and serializes sends
 per user/lineitem. Failed delivery returns to pending with bounded exponential
 backoff; successful delivery becomes sent. Replacement never clears the existing

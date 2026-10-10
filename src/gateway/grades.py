@@ -27,6 +27,18 @@ class Grades:
             current=max(current,previous+datetime.timedelta(microseconds=1))
         return current.isoformat(timespec="microseconds")
 
+    def _record(self,db,stable,latest,identifier,version,binding,given,maximum,now):
+        if latest and json.loads(latest["data"])==stable:
+            # Consecutive identical polls retry the committed event, including its
+            # original timestamp. A later return to old content is a new revision.
+            prior=db.execute("SELECT payload FROM outbox WHERE id=?",(latest["event_id"],)).fetchone()
+            if prior:return json.loads(prior["payload"])
+        event_id=digest({"scope":[identifier,version],"evidence":stable,"previousEvent":latest["event_id"] if latest else None})
+        payload={"userId":binding["subject"],"scoreGiven":given,"scoreMaximum":maximum,"activityProgress":"Completed","gradingProgress":"FullyGraded","timestamp":self._timestamp(db,binding["user_id"],binding["lineitem"],now)}
+        db.execute("INSERT INTO observations VALUES(?,?,?,?,?,?)",(event_id,identifier,version,stable["currentAttempt"]["number"],json.dumps(stable,sort_keys=True),now))
+        db.execute("INSERT INTO outbox(id,assignment_id,version,user_id,context,resource,delivery,lineitem,payload,created) VALUES(?,?,?,?,?,?,?,?,?,?)",(event_id,identifier,version,binding["user_id"],binding["context"],binding["resource"],self.assignments.delivery["deliveryHash"],binding["lineitem"],json.dumps(payload,sort_keys=True),now))
+        return payload
+
     def _questions(self, policy, evidence):
         ids=policy["questionIds"]; required=policy["requiredQuestionIds"]
         if not isinstance(evidence,list) or len(evidence)!=len(ids): raise GatewayError("Exact scoped questions required",503)
@@ -60,18 +72,13 @@ class Grades:
             if attempt is None: return None
             closed(attempt,{"id","number"})
             if not isinstance(attempt["id"],str) or not attempt["id"] or type(attempt["number"]) is not int or attempt["number"]<1: raise GatewayError("Invalid current attempt",503)
-            latest=db.execute("SELECT attempt_number,data FROM observations WHERE assignment_id=? AND version=? ORDER BY attempt_number DESC LIMIT 1",(current["id"],current["version"])).fetchone()
+            latest=db.execute("SELECT event_id,attempt_number,data FROM observations WHERE assignment_id=? AND version=? ORDER BY attempt_number DESC,rowid DESC LIMIT 1",(current["id"],current["version"])).fetchone()
             if latest and attempt["number"]<latest["attempt_number"]:
                 self.store.audit(db,"old-attempt-ignored",current["id"],attempt,now);return None
             if latest and attempt["number"]==latest["attempt_number"] and json.loads(latest["data"])["currentAttempt"]["id"]!=attempt["id"]: raise GatewayError("Conflicting current attempt",503)
             if not any(q["status"]=="complete" and q["score"] is not None for q in evidence["questions"]): return None
             stable={**evidence,"questions":sorted(evidence["questions"],key=lambda q:q["qualifiedId"])}
-            event_id=digest(stable)
-            timestamp=self._timestamp(db,current["user_id"],current["lineitem"],now)
-            payload={"userId":current["subject"],"scoreGiven":computed["completedRequired"],"scoreMaximum":computed["requiredCount"],"activityProgress":"Completed","gradingProgress":"FullyGraded","timestamp":timestamp}
-            db.execute("INSERT OR IGNORE INTO observations VALUES(?,?,?,?,?,?)",(event_id,current["id"],current["version"],attempt["number"],json.dumps(stable,sort_keys=True),now))
-            db.execute("INSERT OR IGNORE INTO outbox(id,assignment_id,version,user_id,context,resource,delivery,lineitem,payload,created) VALUES(?,?,?,?,?,?,?,?,?,?)",(event_id,current["id"],current["version"],current["user_id"],current["context"],current["resource"],current["delivery"],current["lineitem"],json.dumps(payload,sort_keys=True),now))
-            return payload
+            return self._record(db,stable,latest,current["id"],current["version"],current,computed["completedRequired"],computed["requiredCount"],now)
 
     def _lab_id(self,user_id,activity):
         return "lab-"+digest([user_id,activity,self.assignments.delivery["deliveryHash"]])
@@ -101,15 +108,11 @@ class Grades:
             if not number(given) or not number(maximum) or not 0<=given<=maximum or maximum<=0: raise GatewayError("Invalid declared native lab score",503)
             if not any(q["status"]=="complete" and q["score"] is not None for q in evidence["questions"]): return None
             identifier=self._lab_id(current["user_id"],current["activity"])
-            latest=db.execute("SELECT attempt_number,data FROM observations WHERE assignment_id=? ORDER BY attempt_number DESC LIMIT 1",(identifier,)).fetchone()
+            latest=db.execute("SELECT event_id,attempt_number,data FROM observations WHERE assignment_id=? ORDER BY attempt_number DESC,rowid DESC LIMIT 1",(identifier,)).fetchone()
             if latest and attempt["number"]<latest["attempt_number"]: return None
             if latest and attempt["number"]==latest["attempt_number"] and json.loads(latest["data"])["currentAttempt"]["id"]!=attempt["id"]: raise GatewayError("Conflicting native lab attempt",503)
             stable={**evidence,"questions":sorted(evidence["questions"],key=lambda q:q["qualifiedId"])}
-            event_id=digest({"activity":current["activity"],**stable})
-            payload={"userId":current["subject"],"scoreGiven":given,"scoreMaximum":maximum,"activityProgress":"Completed","gradingProgress":"FullyGraded","timestamp":self._timestamp(db,current["user_id"],current["lineitem"],now)}
-            db.execute("INSERT OR IGNORE INTO observations VALUES(?,?,?,?,?,?)",(event_id,identifier,1,attempt["number"],json.dumps(stable,sort_keys=True),now))
-            db.execute("INSERT OR IGNORE INTO outbox(id,assignment_id,version,user_id,context,resource,delivery,lineitem,payload,created) VALUES(?,?,?,?,?,?,?,?,?,?)",(event_id,identifier,1,current["user_id"],current["context"],current["resource"],self.assignments.delivery["deliveryHash"],current["lineitem"],json.dumps(payload,sort_keys=True),now))
-            return payload
+            return self._record(db,stable,latest,identifier,1,current,given,maximum,now)
 
     def _current_lab(self,row,db):
         for activity,config in self.activities.items():
@@ -148,8 +151,9 @@ class Grades:
                 db.execute("UPDATE outbox SET state='sent',lease_until=0 WHERE id=?",(event_id,))
                 assignment=db.execute("SELECT * FROM assignments WHERE id=?",(row["assignment_id"],)).fetchone()
                 threshold=self.assignments.works[assignment["work"]]["completion"]["atLeast"] if assignment else None
-                if threshold is not None and payload["scoreGiven"]>=threshold:
-                    db.execute("UPDATE assignments SET state='completed' WHERE id=? AND version=? AND state IN ('assigned','approved','completed')",(row["assignment_id"],row["version"]))
+                if threshold is not None:
+                    state="completed" if payload["scoreGiven"]>=threshold else assignment["desired_state"]
+                    db.execute("UPDATE assignments SET state=? WHERE id=? AND version=? AND state IN ('assigned','approved','completed')",(state,row["assignment_id"],row["version"]))
                 self.store.audit(db,"ags-score-sent",event_id,{"assignment":row["assignment_id"],"version":row["version"]},now)
 
     async def poll(self):
