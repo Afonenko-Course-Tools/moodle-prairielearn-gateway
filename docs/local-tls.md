@@ -1,5 +1,10 @@
 # TLS локального Moodle и Gateway
 
+Среда разработки и автоматизация этого локального прототипа проверены на
+**CachyOS (Linux)** с Python 3, OpenSSL и Docker/Compose. Native Windows/macOS
+как среда запуска помощника не проверялись; студенческие браузеры Windows, macOS
+и Linux настраиваются по отдельной инструкции ниже.
+
 Доверие браузера Windows, TLS-клиента Moodle/PHP и TLS-клиента Gateway настраивается
 отдельно. Добавление CA в Windows не меняет доверие внутри контейнера Moodle:
 при пустых `curl.cainfo`/`openssl.cafile` PHP cURL может вернуть error 60.
@@ -49,8 +54,10 @@ python3 tools/make-ca-bundle.py \
 bundle, добавляет ровно один локальный CA и удаляет дубликаты по DER. Он отклоняет
 приватные ключи, несовпадение SHA-256, не-CA, отсутствие `keyCertSign`, неверный срок
 действия или самоподпись и symlink в путях. Выход атомарный, режим `0644`, чтобы
-его мог читать `www-data`; родительские каталоги также должны разрешать проход
-пользователю контейнера. Повторный запуск с теми же входами сохраняет байты и
+его мог читать `www-data`; родительские каталоги **пути внутри контейнера**
+(например `/run/tls`) должны разрешать проход этому пользователю. При file bind
+родительский приватный каталог на хосте может оставаться `0700`: контейнер читает
+смонтированный файл, а не проходит по хостовому пути. Повторный запуск с теми же входами сохраняет байты и
 mtime. Новый CA/обновление публичных корней требуют повторной генерации и
 подтверждения нового pin. Не заменяйте публичный bundle одним локальным корнем:
 Moodle нужны также обычные публичные HTTPS-сервисы.
@@ -107,7 +114,8 @@ JWK/JWKS ключ инструмента LTI проверяет подпись �
 HTTPS. Это разные ключи и разные контракты; приватный JWK не импортируется в
 хранилище доверенных CA.
 
-См. [Platform: локальное развёртывание и TLS](https://github.com/Afonenko-Course-Tools/prairielearn-platform/blob/main/docs/development.md)
-и [студентам Windows: доверие CA устройств](https://github.com/BSU-RFCT-Afonenko-Courses/Java/blob/codex/windows-device-ca/docs/student-windows-certificates.md).
-Последняя ссылка указывает на ветку инструкции до её включения в основную ветку;
+См. [Platform: локальное развёртывание и TLS](https://github.com/Afonenko-Course-Tools/prairielearn-platform/blob/feat/local-pilot-20261008/docs/development.md)
+и [студентам Windows/macOS/Linux: доверие CA устройств](https://github.com/BSU-RFCT-Afonenko-Courses/Java/blob/codex/windows-device-ca/docs/student-device-certificates.md).
+Изменения Platform рассматриваются в [PR #1](https://github.com/Afonenko-Course-Tools/prairielearn-platform/pull/1).
+Ссылки указывают на ветки документации до их включения в основные ветки;
 наличие документа не означает, что CA уже выдан студентам.
