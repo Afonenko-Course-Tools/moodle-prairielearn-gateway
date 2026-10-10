@@ -1,0 +1,22 @@
+---
+default-exercise-target: prairielearn
+default-exercise-course-role: control
+default-exercise-statement-visibility: restricted
+default-exercise-project-check: junit
+---
+# Executable fixture questions {#sec-fixture-questions}
+
+::: {#exr-fixture-one project="/projects/one"}
+## Integer multiplication one
+Implement static int FixtureOne.value(int value), returning value multiplied by 1.
+:::
+
+::: {#exr-fixture-two project="/projects/two"}
+## Integer multiplication two
+Implement static int FixtureTwo.value(int value), returning value multiplied by 2.
+:::
+
+::: {#exr-fixture-three project="/projects/three"}
+## Integer multiplication three
+Implement static int FixtureThree.value(int value), returning value multiplied by 3.
+:::
