@@ -1,0 +1,14 @@
+services:
+  moodle:
+    # Override for the official Docker PHP layout; merge with the Moodle stack.
+    volumes:
+      - type: bind
+        source: ${MOODLE_TLS_BUNDLE:?Set MOODLE_TLS_BUNDLE to the absolute verified public CA bundle path}
+        target: /run/tls/ca-bundle.crt
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MOODLE_TLS_INI:?Set MOODLE_TLS_INI to the absolute owner config/moodle-local-tls.ini path}
+        target: /usr/local/etc/php/conf.d/zz-local-tls.ini
+        read_only: true
+        bind: {create_host_path: false}

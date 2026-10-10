@@ -50,3 +50,5 @@ actual Java numbers/UTF-8 acceptance are separate release gates. Cross-delivery
 assignment migration currently fails closed pending the reviewed explicit
 Platform/Gateway migration workflow; restarting an unchanged delivery preserves
 the persistent assignments, audit and outbox.
+
+Для локального прототипа: [отдельное доверие TLS в Moodle/PHP, Gateway и браузере](docs/local-tls.md), генерация полного публичного CA bundle и Compose override без изменения томов данных.
