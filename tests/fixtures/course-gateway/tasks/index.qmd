@@ -1,0 +1,3 @@
+# Gateway owner fixture {#sec-gateway}
+
+Use only synthetic accounts. This fixture does not claim real Java-course feasibility or Moodle integration.

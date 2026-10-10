@@ -1,0 +1,43 @@
+project:
+  type: book
+  pre-render: _extensions/course-core/entrypoints/pre.ts
+  post-render: _extensions/course-core/entrypoints/post.ts
+book:
+  title: Synthetic Gateway acceptance
+  chapters: [index.qmd, essays.qmd, questions.qmd, lab.qmd, defenses/01.qmd, defenses/02.qmd, defenses/03.qmd, defenses/04.qmd, defenses/05.qmd, defenses/06.qmd, defenses/07.qmd, defenses/08.qmd, defenses/09.qmd, defenses/10.qmd, defenses/11.qmd, defenses/12.qmd, defenses/13.qmd, defenses/14.qmd, defenses/15.qmd, defenses/16.qmd, defenses/17.qmd, defenses/18.qmd, defenses/19.qmd, defenses/20.qmd, defenses/21.qmd, defenses/22.qmd, defenses/23.qmd, defenses/24.qmd, defenses/25.qmd, defenses/26.qmd, defenses/27.qmd, defenses/28.qmd, defenses/29.qmd, defenses/30.qmd, defenses/31.qmd, defenses/32.qmd, defenses/33.qmd, defenses/34.qmd, defenses/35.qmd, defenses/36.qmd, defenses/37.qmd, defenses/38.qmd, defenses/39.qmd, defenses/40.qmd, defenses/41.qmd, defenses/42.qmd, defenses/43.qmd, defenses/44.qmd, defenses/45.qmd, defenses/46.qmd, defenses/47.qmd, defenses/48.qmd, defenses/49.qmd, defenses/50.qmd, defenses/51.qmd, defenses/52.qmd, defenses/53.qmd, defenses/54.qmd, defenses/55.qmd, defenses/56.qmd, defenses/57.qmd, defenses/58.qmd, defenses/59.qmd, defenses/60.qmd]
+filters: [course-core, course-prairielearn]
+exercise-bank: true
+default-exercise-target: manual
+default-exercise-statement-visibility: open
+default-exercise-difficulty: introductory
+default-exercise-time: 15
+course: {adapters: [prairielearn]}
+project-checks:
+  defaults:
+    runtime: java25-junit-v1
+    java: {release: 25, encoding: UTF-8, compiler-options: [-proc:none]}
+    limits: {outer-seconds: 30, networking: false, max-output-bytes: 65536}
+    scoring: {mode: weighted}
+    references: [{name: default, root: reference, optional: false}]
+    discovery: {min-executed: 1, allow-skipped: false}
+  source-profiles:
+    flat: {mode: implementation, root: student, include: ["*.java"]}
+  profiles:
+    junit: {source-profile: flat, tests: ["tests/junit/*.java"]}
+prairielearn:
+  assessment-defaults:
+    question-points: 3
+  delivery:
+    book: tasks
+    course:
+      name: GATEWAY
+      title: Synthetic Gateway course
+      timezone: Europe/Minsk
+      topics: [{name: Java, color: blue2, description: Synthetic Java questions}]
+    instances:
+      pilot:
+        title: Sixty defense variants
+        self-enrollment: false
+        publishing: {start-date: "1970-01-01T00:00:00Z", end-date: "9999-12-31T00:00:00Z"}
+        works: [sec-gateway-lab, sec-defense-01, sec-defense-02, sec-defense-03, sec-defense-04, sec-defense-05, sec-defense-06, sec-defense-07, sec-defense-08, sec-defense-09, sec-defense-10, sec-defense-11, sec-defense-12, sec-defense-13, sec-defense-14, sec-defense-15, sec-defense-16, sec-defense-17, sec-defense-18, sec-defense-19, sec-defense-20, sec-defense-21, sec-defense-22, sec-defense-23, sec-defense-24, sec-defense-25, sec-defense-26, sec-defense-27, sec-defense-28, sec-defense-29, sec-defense-30, sec-defense-31, sec-defense-32, sec-defense-33, sec-defense-34, sec-defense-35, sec-defense-36, sec-defense-37, sec-defense-38, sec-defense-39, sec-defense-40, sec-defense-41, sec-defense-42, sec-defense-43, sec-defense-44, sec-defense-45, sec-defense-46, sec-defense-47, sec-defense-48, sec-defense-49, sec-defense-50, sec-defense-51, sec-defense-52, sec-defense-53, sec-defense-54, sec-defense-55, sec-defense-56, sec-defense-57, sec-defense-58, sec-defense-59, sec-defense-60]
+  question-defaults: {topic: Java, submission: {mode: editor, ace-mode: ace/mode/java}}

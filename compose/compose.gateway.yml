@@ -1,0 +1,25 @@
+services:
+  gateway:
+    # Build/pin the reviewed owner image before using this private service.
+    build: ..
+    user: "1000:1000"
+    read_only: true
+    tmpfs: ["/tmp:mode=1777"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    init: true
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 1
+    volumes:
+      - ${GATEWAY_PRIVATE}/runtime.json:/run/config/runtime.json:ro
+      - ${GATEWAY_PRIVATE}/gateway-private-key.json:/run/secrets/gateway-private-key.json:ro
+      - ${GATEWAY_PRIVATE}/handoff-token:/run/secrets/gateway-handoff-token:ro
+      - ${GATEWAY_PRIVATE}/bridge-token:/run/secrets/platform-bridge-token:ro
+      - ${GATEWAY_PRIVATE}/ca.crt:/run/tls/ca.crt:ro
+      - ${GATEWAY_DELIVERY}:/native:ro
+      - ${GATEWAY_DATA}:/var/lib/gateway
+    networks: [gateway-private]
+networks:
+  gateway-private:
+    external: true

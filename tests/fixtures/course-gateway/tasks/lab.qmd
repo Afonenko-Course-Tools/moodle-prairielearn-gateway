@@ -1,0 +1,15 @@
+---
+assessment:
+  kind: lab
+  prairielearn:
+    attempts: 3
+    pass: {at-least: 3}
+    assignment: {mode: assessment-id}
+---
+# Separate laboratory {#sec-gateway-lab}
+
+::: {.task-items}
+1. @exr-fixture-one
+2. @exr-fixture-two
+3. @exr-fixture-three
+:::

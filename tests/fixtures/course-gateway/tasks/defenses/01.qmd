@@ -1,0 +1,16 @@
+---
+assessment:
+  kind: test
+  related-exercise: exr-essay-01
+  prairielearn:
+    attempts: 3
+    pass: {at-least: 2}
+    assignment: {mode: assessment-id}
+---
+# Defense 01 {#sec-defense-01}
+
+::: {.task-items}
+1. @exr-fixture-one
+2. @exr-fixture-two
+3. @exr-fixture-three
+:::

@@ -1,0 +1,3 @@
+# Synthetic Gateway course
+
+This owner fixture contains sixty separate essay defenses and three executable Java questions. It is not the Java course or production delivery.

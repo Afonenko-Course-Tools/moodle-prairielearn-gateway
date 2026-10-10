@@ -1,0 +1,307 @@
+---
+default-exercise-course-role: independent-study
+default-exercise-time: 90
+semester: 1
+categories: [Synthetic]
+---
+# Essay choices {#sec-essay-choices}
+
+::: {#exr-essay-01}
+## Essay 01
+Explain the distinct synthetic contract 01, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-02}
+## Essay 02
+Explain the distinct synthetic contract 02, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-03}
+## Essay 03
+Explain the distinct synthetic contract 03, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-04}
+## Essay 04
+Explain the distinct synthetic contract 04, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-05}
+## Essay 05
+Explain the distinct synthetic contract 05, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-06}
+## Essay 06
+Explain the distinct synthetic contract 06, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-07}
+## Essay 07
+Explain the distinct synthetic contract 07, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-08}
+## Essay 08
+Explain the distinct synthetic contract 08, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-09}
+## Essay 09
+Explain the distinct synthetic contract 09, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-10}
+## Essay 10
+Explain the distinct synthetic contract 10, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-11}
+## Essay 11
+Explain the distinct synthetic contract 11, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-12}
+## Essay 12
+Explain the distinct synthetic contract 12, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-13}
+## Essay 13
+Explain the distinct synthetic contract 13, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-14}
+## Essay 14
+Explain the distinct synthetic contract 14, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-15}
+## Essay 15
+Explain the distinct synthetic contract 15, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-16}
+## Essay 16
+Explain the distinct synthetic contract 16, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-17}
+## Essay 17
+Explain the distinct synthetic contract 17, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-18}
+## Essay 18
+Explain the distinct synthetic contract 18, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-19}
+## Essay 19
+Explain the distinct synthetic contract 19, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-20}
+## Essay 20
+Explain the distinct synthetic contract 20, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-21}
+## Essay 21
+Explain the distinct synthetic contract 21, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-22}
+## Essay 22
+Explain the distinct synthetic contract 22, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-23}
+## Essay 23
+Explain the distinct synthetic contract 23, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-24}
+## Essay 24
+Explain the distinct synthetic contract 24, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-25}
+## Essay 25
+Explain the distinct synthetic contract 25, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-26}
+## Essay 26
+Explain the distinct synthetic contract 26, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-27}
+## Essay 27
+Explain the distinct synthetic contract 27, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-28}
+## Essay 28
+Explain the distinct synthetic contract 28, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-29}
+## Essay 29
+Explain the distinct synthetic contract 29, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-30}
+## Essay 30
+Explain the distinct synthetic contract 30, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-31}
+## Essay 31
+Explain the distinct synthetic contract 31, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-32}
+## Essay 32
+Explain the distinct synthetic contract 32, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-33}
+## Essay 33
+Explain the distinct synthetic contract 33, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-34}
+## Essay 34
+Explain the distinct synthetic contract 34, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-35}
+## Essay 35
+Explain the distinct synthetic contract 35, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-36}
+## Essay 36
+Explain the distinct synthetic contract 36, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-37}
+## Essay 37
+Explain the distinct synthetic contract 37, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-38}
+## Essay 38
+Explain the distinct synthetic contract 38, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-39}
+## Essay 39
+Explain the distinct synthetic contract 39, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-40}
+## Essay 40
+Explain the distinct synthetic contract 40, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-41}
+## Essay 41
+Explain the distinct synthetic contract 41, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-42}
+## Essay 42
+Explain the distinct synthetic contract 42, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-43}
+## Essay 43
+Explain the distinct synthetic contract 43, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-44}
+## Essay 44
+Explain the distinct synthetic contract 44, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-45}
+## Essay 45
+Explain the distinct synthetic contract 45, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-46}
+## Essay 46
+Explain the distinct synthetic contract 46, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-47}
+## Essay 47
+Explain the distinct synthetic contract 47, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-48}
+## Essay 48
+Explain the distinct synthetic contract 48, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-49}
+## Essay 49
+Explain the distinct synthetic contract 49, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-50}
+## Essay 50
+Explain the distinct synthetic contract 50, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-51}
+## Essay 51
+Explain the distinct synthetic contract 51, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-52}
+## Essay 52
+Explain the distinct synthetic contract 52, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-53}
+## Essay 53
+Explain the distinct synthetic contract 53, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-54}
+## Essay 54
+Explain the distinct synthetic contract 54, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-55}
+## Essay 55
+Explain the distinct synthetic contract 55, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-56}
+## Essay 56
+Explain the distinct synthetic contract 56, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-57}
+## Essay 57
+Explain the distinct synthetic contract 57, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-58}
+## Essay 58
+Explain the distinct synthetic contract 58, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-59}
+## Essay 59
+Explain the distinct synthetic contract 59, then defend it through the canonically related assessment.
+:::
+
+::: {#exr-essay-60}
+## Essay 60
+Explain the distinct synthetic contract 60, then defend it through the canonically related assessment.
+:::
