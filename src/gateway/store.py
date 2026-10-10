@@ -4,6 +4,7 @@ import hashlib
 import json
 import secrets
 import sqlite3
+import time
 import math
 from decimal import Decimal
 from .errors import LaunchError
@@ -37,11 +38,31 @@ def native_digest(value):
     return hashlib.sha256(canonical(value).encode()).hexdigest()
 
 class Store:
+    @staticmethod
+    def _enable_wal(db):
+        # Concurrent first opens can fail this PRAGMA without honoring SQLite's
+        # busy handler. Retry only lock contention within the normal 15s budget.
+        deadline = time.monotonic() + 15
+        try:
+            while True:
+                remaining = max(0, deadline - time.monotonic())
+                db.execute(f"PRAGMA busy_timeout={int(remaining * 1000)}")
+                try:
+                    db.execute("PRAGMA journal_mode=WAL")
+                    return
+                except sqlite3.OperationalError as error:
+                    code = getattr(error, "sqlite_errorcode", 0) & 0xff
+                    if code not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(min(0.01, max(0, deadline - time.monotonic())))
+        finally:
+            db.execute("PRAGMA busy_timeout=15000")
+
     def __init__(self, path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
-            db.execute("PRAGMA journal_mode=WAL")
+            self._enable_wal(db)
             migration = Path(__file__).resolve().parents[2] / "migrations/001_runtime.sql"
             # Wheel installs package data; source checkouts use owner migrations.
             if not migration.exists(): migration = Path(__import__("sys").prefix) / "share/moodle-prairielearn-gateway/migrations/001_runtime.sql"
