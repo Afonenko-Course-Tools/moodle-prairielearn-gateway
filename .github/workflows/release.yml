@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
@@ -37,7 +37,7 @@ jobs:
               raise SystemExit('Tag must match the packaged version')
           def git(*args):
               return subprocess.check_output(['git', *args], text=True).strip()
-          if git('rev-parse', 'HEAD') != git('rev-parse', tag + '^{commit}'):
+          if git('rev-parse', 'HEAD') != git('rev-parse', '--verify', 'refs/tags/' + tag + '^{commit}'):
               raise SystemExit('Checkout does not match the requested version tag')
           if subprocess.run(['git', 'merge-base', '--is-ancestor', 'HEAD', 'origin/main']).returncode:
               raise SystemExit('Release source is not integrated in main')

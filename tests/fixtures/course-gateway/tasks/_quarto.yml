@@ -25,6 +25,8 @@ project-checks:
   profiles:
     junit: {source-profile: flat, tests: ["tests/junit/*.java"]}
 prairielearn:
+  assessment-defaults:
+    question-points: 3
   delivery:
     book: tasks
     course:

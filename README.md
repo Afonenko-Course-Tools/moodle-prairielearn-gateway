@@ -39,7 +39,8 @@ Moodle acceptance.
 
 `tests/fixtures/course-gateway/` contains three synthetic Java bank questions,
 60 distinct manual essay declarations and 60 related defenses, plus an ordinary
-lab. `tools/export-fixture.py --help` exports this source through standard installed
+lab. Its source explicitly declares three points per question; exporter5 requires
+authored grading values rather than inserting internal defaults. `tools/export-fixture.py --help` exports this source through standard installed
 Core/exporter packages and checks the resulting native inventory. Its generated
 delivery, private grading and evidence stay outside the owner source. Runtime
 keys/users/tokens, native sessions, SQLite data and Moodle receipts stay outside Git.
