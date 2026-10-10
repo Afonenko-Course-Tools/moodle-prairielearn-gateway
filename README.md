@@ -52,3 +52,22 @@ Platform/Gateway migration workflow; restarting an unchanged delivery preserves
 the persistent assignments, audit and outbox.
 
 Для локального прототипа: [отдельное доверие TLS в Moodle/PHP, Gateway и браузере](docs/local-tls.md), генерация полного публичного CA bundle и Compose override без изменения томов данных.
+
+## Versioned release
+
+Version 1.0.0 packages runtime schema 1/2 and preserves unchanged-delivery state.
+Changed deliveries fail closed; explicit delivery migration is deferred. Install
+the wheel attached to the versioned GitHub release in a Python 3.14 environment,
+or install the complete owner source from the same tag and locked dependencies.
+
+The `Publish Gateway release image` workflow accepts an existing reviewed tag,
+checks its packaged version and integration into `main`, runs owner tests and
+publishes the Linux amd64 image. It attaches `release-images.json` with the
+actual registry digest, source commit and wheel hash to that release. A release
+is ready for deployment after those assets exist and the exact digest passes
+local integration. A local Docker image ID is not a registry digest.
+
+Use `ghcr.io/afonenko-course-tools/moodle-prairielearn-gateway@sha256:…` from
+that receipt when deploying; replace the example with the full recorded digest.
+Students need only browser access. Developers on another CachyOS laptop use their
+own local CA and the portable paths described in [local TLS](docs/local-tls.md).
