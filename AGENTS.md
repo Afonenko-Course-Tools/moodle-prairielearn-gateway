@@ -1,3 +1,13 @@
-# Working rules
+# Инструкции для автора и агента
 
-Use synthetic fixtures only. Keep secrets and runtime identities outside this repository. Java courses require JDK25 or newer. Real Moodle tests belong to the final stage. Backup/restore workflows are outside the current pilot.
+Используйте только вымышленные тестовые данные. Храните секреты и учётные
+записи среды исполнения вне этого репозитория. Для курсов Java требуется
+JDK25 или новее. Проверки в настоящем Moodle относятся к финальному этапу.
+Сценарии резервного копирования и восстановления не входят в текущий пилот.
+
+## Язык новых текстов
+
+Новые README, документацию и описания PR пишите только по-русски.
+Перед работой прочитайте [общее языковое правило](https://github.com/Afonenko-Course-Tools/quarto-course/blob/main/docs/russian-language-policy.md)
+и применяйте его к авторскому и генерируемому тексту. Команды, идентификаторы
+API, пути, имена пакетов и URL сохраняйте буквально.
