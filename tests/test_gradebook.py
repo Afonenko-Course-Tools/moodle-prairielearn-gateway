@@ -127,3 +127,32 @@ async def test_changed_runtime_activity_cannot_deliver_prior_pending_grade(setup
     with pytest.raises(GatewayError):grades.observe(row,evidence)
     await grades.drain();assert not ags.sent
     with store.connect() as db:assert db.execute("SELECT state FROM outbox").fetchone()[0]=="obsolete"
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("queued_state",["pending","sending"])
+@pytest.mark.parametrize("change",["delivery","instance"])
+async def test_restart_changed_delivery_or_instance_fences_old_observation_and_outbox(setup,queued_state,change):
+    store,student,_,assignments,grades,ags=setup
+    row=await assignments.request(student,"exr-essay-a","a")
+    evidence=result(row,student["uid"]);grades.observe(row,evidence)
+    with store.transaction() as db:
+        db.execute("UPDATE outbox SET state=?,lease_until=900",(queued_state,))
+    upgraded=delivery();instance="pilot"
+    if change=="delivery":upgraded["deliveryHash"]="b"*64
+    else:
+        instance="other";upgraded["instances"][instance]=upgraded["instances"]["pilot"]
+    reopened=Store(store.path)
+    restarted=Assignments(reopened,Bridge(),upgraded,instance,{"mode":"immediate","capacity":{}},clock=lambda:2000)
+    resumed=Grades(reopened,restarted,ags,clock=lambda:2000)
+    accepted=resumed.observe(row,evidence)
+    await resumed.drain()
+    assert not ags.sent  # No replacement/zero score; preserve the prior Moodle grade.
+    assert accepted is None
+    with reopened.connect() as db:
+        current=db.execute("SELECT * FROM assignments WHERE id=?",(row["id"],)).fetchone()
+        assert current["state"]=="assigned" and current["version"]==row["version"]
+        assert current["delivery"]==row["delivery"] and current["lineitem"]==row["lineitem"]
+        assert db.execute("SELECT state FROM outbox").fetchone()[0]=="obsolete"
+        assert db.execute("SELECT count(*) FROM observations").fetchone()[0]==1
+        assert db.execute("SELECT count(*) FROM audit WHERE kind='old-result-ignored'").fetchone()[0]==1
+        assert db.execute("SELECT count(*) FROM audit WHERE kind='old-outbox-ignored'").fetchone()[0]==1

@@ -46,7 +46,7 @@ class Grades:
         now=int(self.clock())
         with self.store.transaction() as db:
             current=db.execute("SELECT a.*,u.uid,u.subject FROM assignments a JOIN users u ON u.id=a.user_id WHERE a.id=?",(assignment["id"],)).fetchone()
-            if not current or current["state"] not in ACTIVE or any(current[k]!=assignment[k] for k in ("version","delivery","work","user_id","context","resource","lineitem")):
+            if not current or current["state"] not in ACTIVE or current["delivery"]!=self.assignments.delivery["deliveryHash"] or current["instance"]!=self.assignments.instance or any(current[k]!=assignment[k] for k in ("version","delivery","work","user_id","context","resource","lineitem")):
                 self.store.audit(db,"old-result-ignored",assignment["id"],{"version":assignment["version"]},now)
                 return None
             self.assignments._binding(current)
@@ -127,12 +127,12 @@ class Grades:
                 row=db.execute("SELECT * FROM outbox WHERE id=?",(event_id,)).fetchone()
                 if row["state"] not in ("pending","sending") or row["state"]=="sending" and row["lease_until"]>now: continue
                 current=db.execute("SELECT * FROM assignments WHERE id=?",(row["assignment_id"],)).fetchone()
-                valid=bool(current and current["state"] in ACTIVE and all(current[k]==row[k] for k in ("version","user_id","context","resource","delivery","lineitem"))) or self._current_lab(row,db)
+                valid=bool(current and current["state"] in ACTIVE and current["instance"]==self.assignments.instance and current["delivery"]==self.assignments.delivery["deliveryHash"] and all(current[k]==row[k] for k in ("version","user_id","context","resource","delivery","lineitem"))) or self._current_lab(row,db)
                 if current:
                     try:self.assignments._binding(current)
                     except GatewayError:valid=False
-                latest=db.execute("SELECT event_id FROM observations WHERE assignment_id=? AND version=? ORDER BY attempt_number DESC,rowid DESC LIMIT 1",(row["assignment_id"],row["version"])).fetchone()
-                valid=valid and latest and latest["event_id"]==event_id
+                latest=db.execute("SELECT event_id,data FROM observations WHERE assignment_id=? AND version=? ORDER BY attempt_number DESC,rowid DESC LIMIT 1",(row["assignment_id"],row["version"])).fetchone()
+                valid=valid and row["delivery"]==self.assignments.delivery["deliveryHash"] and latest and latest["event_id"]==event_id and json.loads(latest["data"])["instance"]==self.assignments.instance
                 if not valid:
                     db.execute("UPDATE outbox SET state='obsolete' WHERE id=?",(event_id,));self.store.audit(db,"old-outbox-ignored",event_id,{},now);continue
                 if db.execute("SELECT 1 FROM outbox WHERE id!=? AND user_id=? AND lineitem=? AND state='sending' AND lease_until>?",(event_id,row["user_id"],row["lineitem"],now)).fetchone(): continue
