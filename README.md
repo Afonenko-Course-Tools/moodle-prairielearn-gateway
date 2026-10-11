@@ -72,3 +72,9 @@ Use `ghcr.io/afonenko-course-tools/moodle-prairielearn-gateway@sha256:…` from
 that receipt when deploying; replace the example with the full recorded digest.
 Students need only browser access. Developers on another CachyOS laptop use their
 own local CA and the portable paths described in [local TLS](docs/local-tls.md).
+
+## Несколько курсов и серверный пилот
+
+Общая LTI-регистрация одного Moodle курса и независимые native-курсы описаны
+в [инструкции](docs/two-courses.md). Пример конфигурации —
+[config/courses.example.json](config/courses.example.json).

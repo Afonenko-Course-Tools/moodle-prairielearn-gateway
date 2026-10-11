@@ -54,3 +54,22 @@ disables forwarded-header trust and request access logs; secrets and tokens must
 not be logged by the surrounding proxy.
 
 Library reference: [joserfc JWT validation](https://jose.authlib.org/en/guide/jwt/).
+
+## Единственный преподаватель с полными правами PL
+
+По умолчанию Instructor получает только интерфейс Gateway. Для явно выбранного
+владельца private config задаёт `administratorSubject`: точный `sub` после
+проверенного Moodle launch в текущей issuer/client/deployment регистрации.
+`POST /gateway/launch/administrator` требует эту identity, роль teacher, Origin
+и CSRF; одноразовый handoff направляет callback только на
+`/gateway/administrator-bootstrap`. Bootstrap вызывает приватный Platform bridge
+с серверным UID. Bridge независимо сравнивает UID с `administratorUid` в своём
+private config, требует существующего native пользователя и идемпотентно
+назначает полные права PL administrator с native audit записью.
+
+После подтверждённого grant bootstrap включает штатный cookie `pl2_access_as_administrator=active` (Secure/HttpOnly/SameSite=Lax); native middleware всё равно требует реальную administrator запись в БД. Кнопка «Открыть панель администратора PrairieLearn» появляется только владельцу.
+Новый обычный Instructor или Learner admin не получает. Для отключения будущего
+bootstrap удалить обе private привязки; уже назначенную administrator роль
+нужно явно снять штатно в PL — изменение config не обещает удаления роли.
+Повторный вход не требует нового пароля; истёкшая Gateway session требует
+нового входа из Moodle. Реальные `sub`, UID и служебные ключи не публикуются.

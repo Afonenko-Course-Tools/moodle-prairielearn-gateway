@@ -25,6 +25,12 @@ class PLClient:
     async def work_results(self,uid,instance,delivery,work):
         return await self._call("GET","/internal/gateway/work-results",params={"userUid":uid,"instance":instance,"deliveryHash":delivery,"workId":work})
 
+    async def administrator(self,uid):
+        answer=await self._call("PUT","/internal/gateway/administrator",json={"userUid":uid})
+        expected={"schemaVersion":1,"userUid":uid,"administrator":True,"path":"/pl/administrator/courses"}
+        if set(answer)!=set(expected) or any(answer[k]!=v or type(answer[k]) is not type(v) for k,v in expected.items()): raise GatewayError("Native administrator evidence mismatch",503)
+        return answer
+
     async def enroll(self,uid,instance,delivery):
         payload={"userUid":uid,"instance":instance,"deliveryHash":delivery}
         answer=await self._call("PUT","/internal/gateway/enrollment",json=payload)

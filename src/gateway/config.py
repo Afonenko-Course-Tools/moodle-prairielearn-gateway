@@ -40,7 +40,7 @@ class Registration(Closed):
             if mapped.scheme!="http" or mapped.hostname!="moodle" or mapped.port not in (None,80) or mapped.username or mapped.password or mapped.path!=public.path or mapped.query or mapped.fragment:
                 raise ValueError("Only fixed private Moodle JWKS transport mapping is allowed")
         if not self.activities or len({v.resourceLinkId for v in self.activities.values()})!=len(self.activities): raise ValueError("Unique activity bindings required")
-        if sum(v.kind=="defense" for v in self.activities.values())!=1: raise ValueError("One defense lineitem required")
+        if sum(v.kind=="defense" for v in self.activities.values())>1: raise ValueError("At most one defense lineitem required")
         for activity in self.activities.values():
             if origin(activity.lineitem)!=expected or activity.kind=="lab" and not activity.workId or activity.kind=="defense" and activity.workId: raise ValueError("Fixed AGS activity/work binding required")
         return self
@@ -65,6 +65,7 @@ class Bridge(Closed):
 class Configuration(Closed):
     schemaVersion: Literal[1]
     publicOrigin: str
+    routePrefix: str = Field(default='/gateway',pattern=r'^/gateway(?:/courses/[a-z][a-z0-9-]*)?$')
     database: str
     privateKeyFile: str
     handoffTokenFile: str
@@ -75,6 +76,7 @@ class Configuration(Closed):
     flow: Flow
     caFile: str | None = None
     pollSeconds: int = Field(default=15,ge=1,le=3600)
+    administratorSubject: str | None = Field(default=None,min_length=1,max_length=512)
     @model_validator(mode="after")
     def paths(self):
         parsed=urlsplit(self.publicOrigin);origin(self.publicOrigin)

@@ -57,13 +57,13 @@ class Clients:
 
 PAGE = """<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Мои работы</title>
 <style>body{max-width:60em;margin:2em auto;padding:1em;font:18px system-ui}button,select,input{font:inherit;margin:.3em;padding:.4em}li{margin:1em 0}#status{white-space:pre-wrap}</style>
-<h1>Мои работы</h1><p id="status" role="status"></p><ul id="works"></ul><section id="selection"><h2>Выбор реферата</h2><select id="essay" aria-label="Постановка реферата"></select><button id="choose">Запросить назначение</button></section><section id="teacher" hidden><h2>Назначения преподавателя</h2><select id="student" aria-label="Студент"></select><button id="assign">Назначить</button><ul id="requests"></ul></section>
+<h1>Мои работы</h1><p id="status" role="status"></p><ul id="works"></ul><div id="administrator"></div><section id="selection"><h2>Выбор реферата</h2><select id="essay" aria-label="Постановка реферата"></select><button id="choose">Запросить назначение</button></section><section id="teacher" hidden><h2>Назначения преподавателя</h2><select id="student" aria-label="Студент"></select><button id="assign">Назначить</button><ul id="requests"></ul></section>
 <script>
 let state;
 const status=document.getElementById('status');
 async function send(path,body){const r=await fetch('/gateway/'+path,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':state.csrfToken},body:JSON.stringify(body)});const value=await r.json();if(!r.ok)throw Error(value.detail||'Операция не выполнена');await load();return value;}
 function button(label,action){const b=document.createElement('button');b.textContent=label;b.onclick=()=>action().catch(e=>status.textContent=e.message);return b;}
-async function load(){const r=await fetch('/gateway/my/works');state=await r.json();if(!r.ok)throw Error(state.detail||'Требуется вход из Moodle');status.textContent=state.assignment?'Назначение: '+state.assignment.state:'Назначение отсутствует';const works=document.getElementById('works');works.replaceChildren();for(const w of state.works){const li=document.createElement('li');li.textContent=w.id+' ';if(state.role==='student')li.append(button('Открыть PrairieLearn',async()=>{const value=await send('launch/pl/'+encodeURIComponent(w.id),{});location.assign(value.url);}));works.append(li);}const essays=document.getElementById('essay');essays.replaceChildren();for(const e of state.essays){const o=document.createElement('option');o.value=e;o.textContent=e;essays.append(o);}document.getElementById('selection').hidden=state.activityKind!=='defense';document.getElementById('choose').hidden=state.role!=='student'||state.mode==='teacher';if(state.role==='teacher'){document.getElementById('teacher').hidden=false;const rr=await fetch('/gateway/teacher/roster');const roster=await rr.json();const students=document.getElementById('student');students.replaceChildren();const requests=document.getElementById('requests');requests.replaceChildren();for(const s of roster.students){const o=document.createElement('option');o.value=s.userId;o.textContent=s.name;students.append(o);if(s.assignment){const li=document.createElement('li');li.textContent=s.name+' — '+s.assignment.state+' '+(s.assignment.essay||'');const id=encodeURIComponent(s.assignment.id);if(s.assignment.state==='pending'){li.append(button('Подтвердить',()=>send('teacher/assignments/'+id+'/approve',{})),button('Отклонить',()=>send('teacher/assignments/'+id+'/reject',{})));}if(['assigned','approved','completed'].includes(s.assignment.state)){li.append(button('Заменить выбранным рефератом',()=>send('teacher/assignments/'+id+'/reassign',{essayId:essays.value,idempotencyKey:crypto.randomUUID()})));}requests.append(li);}}}}
+async function load(){const r=await fetch('/gateway/my/works');state=await r.json();if(!r.ok)throw Error(state.detail||'Требуется вход из Moodle');status.textContent=state.assignment?'Назначение: '+state.assignment.state:'Назначение отсутствует';const works=document.getElementById('works');works.replaceChildren();for(const w of state.works){const li=document.createElement('li');li.textContent=w.id+' ';if(state.role==='student')li.append(button('Открыть PrairieLearn',async()=>{const value=await send('launch/pl/'+encodeURIComponent(w.id),{});location.assign(value.url);}));works.append(li);}const admin=document.getElementById('administrator');admin.replaceChildren();if(state.administrator)admin.append(button('Открыть панель администратора PrairieLearn',async()=>{const value=await send('launch/administrator',{});location.assign(value.url);}));const essays=document.getElementById('essay');essays.replaceChildren();for(const e of state.essays){const o=document.createElement('option');o.value=e;o.textContent=e;essays.append(o);}document.getElementById('selection').hidden=state.activityKind!=='defense';document.getElementById('choose').hidden=state.role!=='student'||state.mode==='teacher';if(state.role==='teacher'&&state.activityKind==='defense'){document.getElementById('teacher').hidden=false;const rr=await fetch('/gateway/teacher/roster');const roster=await rr.json();const students=document.getElementById('student');students.replaceChildren();const requests=document.getElementById('requests');requests.replaceChildren();for(const s of roster.students){const o=document.createElement('option');o.value=s.userId;o.textContent=s.name;students.append(o);if(s.assignment){const li=document.createElement('li');li.textContent=s.name+' — '+s.assignment.state+' '+(s.assignment.essay||'');const id=encodeURIComponent(s.assignment.id);if(s.assignment.state==='pending'){li.append(button('Подтвердить',()=>send('teacher/assignments/'+id+'/approve',{})),button('Отклонить',()=>send('teacher/assignments/'+id+'/reject',{})));}if(['assigned','approved','completed'].includes(s.assignment.state)){li.append(button('Заменить выбранным рефератом',()=>send('teacher/assignments/'+id+'/reassign',{essayId:essays.value,idempotencyKey:crypto.randomUUID()})));}requests.append(li);}}}}
 document.getElementById('choose').onclick=()=>send('assignments/request',{essayId:document.getElementById('essay').value,idempotencyKey:crypto.randomUUID()}).catch(e=>status.textContent=e.message);
 document.getElementById('assign').onclick=()=>send('teacher/assignments',{userId:document.getElementById('student').value,essayId:document.getElementById('essay').value,idempotencyKey:crypto.randomUUID()}).catch(e=>status.textContent=e.message);
 load().catch(e=>status.textContent=e.message);
@@ -72,13 +72,14 @@ load().catch(e=>status.textContent=e.message);
 def create_app(config, *, store=None, delivery=None, clients=None, clock=time.time, start_worker=True):
     if not isinstance(config,Configuration): config=Configuration.model_validate(config)
     store=store or Store(config.database)
+    store.gateway_prefix=config.routePrefix
     delivery=delivery or load_delivery(config.deliveryPath,config.instance)
     own_clients=clients is None
     clients=clients or Clients(config)
     registration=config.registration.model_dump()
-    registration["targetLinkUri"]=config.publicOrigin.rstrip("/")+"/gateway/lti/launch"
+    registration["targetLinkUri"]=config.publicOrigin.rstrip("/")+config.routePrefix + "/lti/launch"
     launch=LaunchService(store,registration,clock)
-    defense_key=next(k for k,v in config.registration.activities.items() if v.kind=="defense")
+    defense_key=next((k for k,v in config.registration.activities.items() if v.kind=="defense"),next(iter(config.registration.activities)))
     defense=config.registration.activities[defense_key]
     flow={**config.flow.model_dump(),"contextId":registration["contextId"],"resourceLinkId":defense.resourceLinkId,"lineitem":defense.lineitem}
     assignments=Assignments(store,clients.bridge,delivery,config.instance,flow,clock)
@@ -124,7 +125,7 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
         if write and (request.headers.get("origin")!=config.publicOrigin.rstrip("/") or not secrets.compare_digest(request.headers.get("x-csrf-token",""),value["csrf"])): raise LaunchError("CSRF origin/token rejected")
         return value
 
-    @app.api_route("/gateway/lti/login",methods=["GET","POST"])
+    @app.api_route(config.routePrefix + "/lti/login",methods=["GET","POST"])
     async def login(request:Request):
         params=dict(await request.form()) if request.method=="POST" else dict(request.query_params)
         allowed={"iss","client_id","target_link_uri","login_hint","lti_message_hint","lti_deployment_id"}
@@ -133,25 +134,27 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
         pending=launch.begin(params.get("iss"),params.get("client_id"),params.get("target_link_uri"),params.get("login_hint"),params.get("lti_message_hint"),binding)
         query={"scope":"openid","response_type":"id_token","response_mode":"form_post","prompt":"none","client_id":registration["clientId"],"redirect_uri":registration["targetLinkUri"],"login_hint":params["login_hint"],"lti_message_hint":params["lti_message_hint"],**pending}
         response=RedirectResponse(registration["authUrl"]+"?"+urlencode(query),status_code=303)
-        response.set_cookie("GatewayBinding",binding,secure=True,httponly=True,samesite="none",path="/gateway",max_age=300)
+        response.set_cookie("GatewayBinding",binding,secure=True,httponly=True,samesite="none",path=config.routePrefix,max_age=300)
         return response
 
-    @app.post("/gateway/lti/launch")
+    app.state.login_handler=login
+
+    @app.post(config.routePrefix + "/lti/launch")
     async def verified_launch(request:Request):
         if len(await request.body())>65536: raise LaunchError("Launch too large")
         params=dict(await request.form())
         if set(params)!={"state","id_token"}: raise LaunchError("Launch fields rejected")
         value=launch.verify(params["state"],request.cookies.get("GatewayBinding",""),params["id_token"],await clients.jwks())
         if value["role"]=="student":
-            token=store.handoff(value["token"],"/gateway/bootstrap",int(clock()))
-            response=RedirectResponse("/gateway/pl/"+token,status_code=303)
-            response.set_cookie("pl2_pre_auth_url","/gateway/bootstrap",secure=True,httponly=True,samesite="lax",path="/")
-        else: response=RedirectResponse("/gateway/",status_code=303)
-        response.set_cookie("GatewaySession",value["token"],secure=True,httponly=True,samesite="lax",path="/gateway",max_age=3600)
-        response.delete_cookie("GatewayBinding",path="/gateway",secure=True,httponly=True,samesite="none")
+            token=store.handoff(value["token"],config.routePrefix + "/bootstrap",int(clock()))
+            response=RedirectResponse(config.routePrefix + "/pl/"+token,status_code=303)
+            response.set_cookie("pl2_pre_auth_url",config.routePrefix + "/bootstrap",secure=True,httponly=True,samesite="lax",path="/")
+        else: response=RedirectResponse(config.routePrefix + "/",status_code=303)
+        response.set_cookie("GatewaySession",value["token"],secure=True,httponly=True,samesite="lax",path=config.routePrefix,max_age=3600)
+        response.delete_cookie("GatewayBinding",path=config.routePrefix,secure=True,httponly=True,samesite="none")
         return response
 
-    @app.get("/internal/handoff/{token}")
+    @app.get("/internal/handoff" + config.routePrefix.removeprefix("/gateway") + "/{token}")
     async def consume(token:str,request:Request):
         expected="Bearer "+(app.state.handoff_secret or secrets.token_urlsafe(32))
         if not secrets.compare_digest(request.headers.get("authorization",""),expected): raise LaunchError("Private service authentication required")
@@ -161,60 +164,82 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
         if any(ord(c)<32 or ord(c)>126 for c in name): name="Moodle participant"
         return JSONResponse(value,headers={"X-Verified-Uid":value["uid"],"X-Verified-Name":name,"X-Verified-Target":value["target"]})
 
-    @app.get("/gateway/.well-known/jwks.json")
+    @app.get(config.routePrefix + "/.well-known/jwks.json")
     async def tool_keys():
         if not hasattr(clients,"key"): raise GatewayError("Tool key unavailable",503)
         return {"keys":[clients.key.as_dict(private=False)]}
 
-    @app.get("/gateway/")
+    @app.get(config.routePrefix + "/")
     async def home(request:Request):
         session(request)
-        return HTMLResponse(PAGE)
+        return HTMLResponse(PAGE.replace("/gateway",config.routePrefix))
 
-    @app.get("/gateway/bootstrap")
+    @app.get(config.routePrefix + "/bootstrap")
     async def bootstrap(request:Request):
         who=session(request)
         if who["role"]!="student": raise LaunchError("Native Student enrollment required")
         await clients.bridge.enroll(who["uid"],config.instance,delivery["deliveryHash"])
         await assignments.reconcile_all()
-        return RedirectResponse("/gateway/",status_code=303)
+        return RedirectResponse(config.routePrefix + "/",status_code=303)
 
-    @app.get("/gateway/my/works")
+    def administrator_allowed(who):
+        return bool(config.administratorSubject) and who["role"]=="teacher" and all(who[key]==value for key,value in (("issuer",registration["issuer"]),("client",registration["clientId"]),("deployment",registration["deploymentId"]),("subject",config.administratorSubject)))
+
+    def administrator_session(request,write=False):
+        who=session(request,write)
+        if not administrator_allowed(who): raise LaunchError("Explicit administrator identity required")
+        return who
+
+    @app.post(config.routePrefix + "/launch/administrator")
+    async def launch_administrator(body:Empty,request:Request):
+        who=administrator_session(request,True)
+        token=store.handoff(request.cookies["GatewaySession"],config.routePrefix + "/administrator-bootstrap",int(clock()))
+        return {"url":config.routePrefix + "/pl/"+token}
+
+    @app.get(config.routePrefix + "/administrator-bootstrap")
+    async def administrator_bootstrap(request:Request):
+        who=administrator_session(request)
+        answer=await clients.bridge.administrator(who["uid"])
+        response=RedirectResponse(answer["path"],status_code=303)
+        response.set_cookie("pl2_access_as_administrator","active",secure=True,httponly=True,samesite="lax",path="/")
+        return response
+
+    @app.get(config.routePrefix + "/my/works")
     async def works(request:Request):
         who=session(request)
         activity=config.registration.activities[who["activity"]]
-        return {"works":[{"id":w["id"],"essayId":w.get("relatedExercise")} for w in assignments.my_works(who)],"assignment":assignments.current(who),"essays":list(assignments.essays),"role":who["role"],"mode":config.flow.mode,"activityKind":activity.kind,"csrfToken":who["csrf"]}
+        return {"works":[{"id":w["id"],"essayId":w.get("relatedExercise")} for w in assignments.my_works(who)],"assignment":assignments.current(who),"essays":list(assignments.essays),"role":who["role"],"administrator":administrator_allowed(who),"mode":config.flow.mode,"activityKind":activity.kind,"csrfToken":who["csrf"]}
 
-    @app.get("/gateway/teacher/roster")
+    @app.get(config.routePrefix + "/teacher/roster")
     async def roster(request:Request):
         who=session(request);assignments._teacher(who)
         with store.connect() as db:
             students=[{"userId":r["id"],"name":r["name"],"assignment":assignments.current({"userId":r["id"]})} for r in db.execute("SELECT DISTINCT u.id,u.name FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.role='student' AND s.context=? AND s.resource=?",(registration["contextId"],defense.resourceLinkId))]
         return {"students":students}
 
-    @app.post("/gateway/assignments/request")
+    @app.post(config.routePrefix + "/assignments/request")
     async def choose(body:Selection,request:Request): return await assignments.request(session(request,True),body.essayId,body.idempotencyKey)
 
-    @app.post("/gateway/teacher/assignments")
+    @app.post(config.routePrefix + "/teacher/assignments")
     async def assign(body:TeacherSelection,request:Request): return await assignments.assign(session(request,True),body.userId,body.essayId,body.idempotencyKey)
 
-    @app.post("/gateway/teacher/assignments/{identifier}/approve")
+    @app.post(config.routePrefix + "/teacher/assignments/{identifier}/approve")
     async def approve(identifier:str,body:Empty,request:Request): return await assignments.approve(session(request,True),identifier)
 
-    @app.post("/gateway/teacher/assignments/{identifier}/reject")
+    @app.post(config.routePrefix + "/teacher/assignments/{identifier}/reject")
     async def reject(identifier:str,body:Empty,request:Request): return await assignments.reject(session(request,True),identifier)
 
-    @app.post("/gateway/teacher/assignments/{identifier}/reassign")
+    @app.post(config.routePrefix + "/teacher/assignments/{identifier}/reassign")
     async def reassign(identifier:str,body:Selection,request:Request): return await assignments.reassign(session(request,True),identifier,body.essayId,body.idempotencyKey)
 
-    @app.post("/gateway/launch/pl/{work_id}")
+    @app.post(config.routePrefix + "/launch/pl/{work_id}")
     async def native_launch(work_id:str,body:Empty,request:Request):
         who=session(request,True);work=assignments.launch_work(who,work_id)
         activity=config.registration.activities[who["activity"]]
         if activity.kind=="lab" and activity.workId!=work_id or activity.kind=="defense" and "relatedExercise" not in work: raise LaunchError("Launch from the matching Moodle activity")
         path=await clients.bridge.work_launch(who["uid"],config.instance,delivery["deliveryHash"],work_id)
         token=store.handoff(request.cookies["GatewaySession"],path,int(clock()))
-        response=JSONResponse({"url":"/gateway/pl/"+token})
+        response=JSONResponse({"url":config.routePrefix + "/pl/"+token})
         response.set_cookie("pl2_pre_auth_url",path,secure=True,httponly=True,samesite="lax",path="/")
         return response
 

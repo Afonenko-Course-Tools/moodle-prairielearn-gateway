@@ -60,6 +60,7 @@ class Store:
 
     def __init__(self, path):
         self.path = Path(path)
+        self.gateway_prefix = '/gateway'
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
             self._enable_wal(db)
@@ -127,8 +128,9 @@ class Store:
         return dict(row)
 
     def handoff(self, session, target, now):
-        self.session(session, now)
-        if not (target=="/gateway/bootstrap" or __import__("re").fullmatch(r"/pl/course_instance/[1-9][0-9]*/assessment/[1-9][0-9]*/",target)): raise LaunchError("Unsafe native target")
+        who=self.session(session, now)
+        administrator_target=target==self.gateway_prefix+"/administrator-bootstrap" and who["role"]=="teacher"
+        if not (administrator_target or target==self.gateway_prefix+"/bootstrap" or __import__("re").fullmatch(r"/pl/course_instance/[1-9][0-9]*/assessment/[1-9][0-9]*/",target)): raise LaunchError("Unsafe native target")
         token = secrets.token_urlsafe(32)
         with self.transaction() as db:
             db.execute("INSERT INTO handoffs(token_hash,session_hash,target,expires) VALUES(?,?,?,?)", (digest(token), digest(session), target, now+60))

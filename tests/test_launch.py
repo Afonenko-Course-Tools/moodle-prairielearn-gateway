@@ -25,6 +25,15 @@ def test_launch_replay_rejected(env):
     assert env[0].session(session["token"], now=1000)["subject"] == "student-a"
     with pytest.raises(LaunchError): env[1].verify(pending["state"], "browser", token, {"keys": [env[2].as_dict(private=False)]})
 
+@pytest.mark.parametrize('offset',[1,5])
+def test_small_issuer_clock_skew_does_not_expand_expiry(env,offset):
+    session,_,_=attempt(env,lambda c:c.update(iat=1000+offset))
+    assert session['role']=='student'
+
+def test_exact_expiry_and_excessive_issuer_skew_rejected(env):
+    for changes in [{'exp':1000},{'iat':1006}]:
+        with pytest.raises(LaunchError): attempt(env,lambda c:c.update(**changes))
+
 @pytest.mark.parametrize("mutate", [
     lambda c: c.update(iss="https://evil.example"), lambda c: c.update(aud="other"),
     lambda c: c.update(aud=["client", "other"], azp="other"),
@@ -69,7 +78,7 @@ def test_identity_tuple_and_missing_enrollment(env):
     assert session["uid"] != other["uid"]
     with pytest.raises(LaunchError): attempt(env, lambda c: c.pop(LTI+"roles"))
 
-@pytest.mark.parametrize("target",["/pl/","/pl/administrator/","//evil.example/","/gateway/bootstrap?next=evil","/pl/course_instance/1/assessment/2/\r\nX-Test: injected"])
+@pytest.mark.parametrize("target",["/pl/","/pl/administrator/courses","//evil.example/","/gateway/bootstrap?next=evil","/pl/course_instance/1/assessment/2/\r\nX-Test: injected"])
 def test_handoff_rejects_unscoped_or_control_targets(env,target):
     session,_,_=attempt(env)
     with pytest.raises(LaunchError):env[0].handoff(session["token"],target,1000)

@@ -36,5 +36,9 @@
       }
     }
   },
-  "flow": {"mode": "approval", "capacity": {}}
+  "flow": {
+    "mode": "approval",
+    "capacity": {}
+  },
+  "administratorSubject": null
 }
