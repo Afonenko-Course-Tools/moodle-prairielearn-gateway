@@ -23,7 +23,7 @@ def test_initial_wal_lock_is_retried_on_same_connection(tmp_path,monkeypatch,cod
     with store.connect() as db:
         assert db.execute("PRAGMA journal_mode").fetchone()[0]=="wal"
         assert db.execute("PRAGMA busy_timeout").fetchone()[0]==15000
-        assert [r[0] for r in db.execute("SELECT version FROM schema_versions ORDER BY version")]==[1,2]
+        assert [r[0] for r in db.execute("SELECT version FROM schema_versions ORDER BY version")]==[3]
 
 def test_permanent_wal_error_is_not_retried_or_hidden(tmp_path,monkeypatch):
     original=sqlite3.connect;attempts=[]
@@ -61,4 +61,4 @@ def test_thirty_fresh_eight_worker_startups_have_no_lock_failures(tmp_path):
         with ThreadPoolExecutor(8) as pool:stores=list(pool.map(start,range(8)))
         with stores[0].connect() as db:
             assert db.execute("PRAGMA journal_mode").fetchone()[0]=="wal"
-            assert [r[0] for r in db.execute("SELECT version FROM schema_versions ORDER BY version")]==[1,2]
+            assert [r[0] for r in db.execute("SELECT version FROM schema_versions ORDER BY version")]==[3]

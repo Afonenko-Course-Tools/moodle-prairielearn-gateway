@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS schema_versions(version INTEGER PRIMARY KEY);
-INSERT OR IGNORE INTO schema_versions VALUES(1);
+INSERT OR IGNORE INTO schema_versions VALUES(3);
 CREATE TABLE IF NOT EXISTS login_states(
  token_hash TEXT PRIMARY KEY, nonce TEXT NOT NULL, binding TEXT NOT NULL,
  expires INTEGER NOT NULL, consumed INTEGER NOT NULL DEFAULT 0
@@ -45,5 +45,16 @@ CREATE TABLE IF NOT EXISTS outbox(
  user_id TEXT NOT NULL REFERENCES users(id), context TEXT NOT NULL, resource TEXT NOT NULL,
  delivery TEXT NOT NULL, lineitem TEXT NOT NULL, payload TEXT NOT NULL,
  state TEXT NOT NULL DEFAULT 'pending', tries INTEGER NOT NULL DEFAULT 0,
- next_attempt INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL
+ next_attempt INTEGER NOT NULL DEFAULT 0, lease_until INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS activity_bindings(
+ user_id TEXT NOT NULL REFERENCES users(id), activity TEXT NOT NULL,
+ context TEXT NOT NULL, resource TEXT NOT NULL, lineitem TEXT NOT NULL,
+ PRIMARY KEY(user_id,activity)
+);
+CREATE TABLE native_attempts(
+ scope TEXT NOT NULL, version INTEGER NOT NULL, instance TEXT NOT NULL,
+ delivery TEXT NOT NULL, work TEXT NOT NULL, attempt_id TEXT NOT NULL,
+ attempt_number INTEGER NOT NULL, selection TEXT NOT NULL,
+ PRIMARY KEY(scope,version,attempt_number), UNIQUE(scope,version,attempt_id)
 );

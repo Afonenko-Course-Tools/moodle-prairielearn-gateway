@@ -1,62 +1,51 @@
-# Trusted results and AGS outbox
+# Результаты позиций и Moodle AGS
 
-The background worker initially polls every 15 seconds, configurable in private
-settings. It reconciles durable assignment intents, reads current scoped native
-results, then drains the SQLite outbox. Gateway reads no PrairieLearn SQL and
-accepts no public grade callback or browser-supplied score.
+Единственный транспорт: `schemaVersion:2`, `source:per-slot-results-v2`. Defense
+добавляет assignmentId/version; lab сохраняет scoreGiven/scoreMaximum. Оба ответа
+содержат userUid/instance/deliveryHash/workId, state/currentAttempt/slots/completion.
+Старые results и delivery отклоняются. Gateway получает результаты только от
+аутентифицированного private Bridge; публичных callbacks с оценкой нет.
 
-Defense reads use `GET /internal/gateway/results?assignmentId=ID&version=N` with
-private service bearer. The closed reply binds schema/source, assignment/version,
-server UID, instance, delivery, work, current attempt and exact qualified question
-set. Gateway independently checks all these values against its current active
-slot and installed completion policy. Unknown/duplicate/missing questions, invalid
-status, non-finite or out-of-range scores and inconsistent aggregate completion fail.
+`not-started` требует null currentAttempt и пустые slots, без выдуманного варианта;
+completedRequired0, requiredCount/atLeast берутся из delivery. `started` содержит
+currentAttempt `{id,number}` и ровно одну строку `{slotId,qualifiedId,score,points,
+maxPoints,status}` каждой позиции. Gateway независимо проверяет позицию, кандидата,
+числа, штатный статус и completion. Не выбранные альтернативы отсутствуют в
+знаменателе. Полное выполнение требует complete, score1 и points=maxPoints>0.
+Optional и частичный результат не заменяют обязательную позицию.
 
-Only required questions whose status is complete and score is exactly 1 count.
-Optional questions never replace required questions; weighted partial credit does
-not become two completed tasks. Defense AGS scoreGiven is completedRequired and
-scoreMaximum is requiredCount. The manifest atLeast threshold controls completed
-assignment state. A wholly ungraded attempt produces no event and preserves the
-previous Moodle grade. Current attempts cannot move backwards or change ID for
-the same number.
+Defense связывается с активным назначением, его version, пользователем и точной
+поставкой. AGS scoreGiven=completedRequired, scoreMaximum=requiredCount. Lab
+связывается с зарегистрированной Moodle activity/context/lineitem, work и delivery;
+его AGS сохраняет фактические native weighted points (например6/8) независимо
+от completion. Отдельного defense назначения для lab нет.
 
-Ordinary lab reads use `/internal/gateway/work-results` with the exact server UID,
-instance, deliveryHash and workId. They require a previously verified fixed Moodle
-lab activity/context/lineitem and an ordinary native work. The reply omits defense
-assignment/version and includes native scoreGiven/scoreMaximum from the current
-attempt. These declared aggregate points preserve native weighting (for example
-6/8), while per-question scope/completion are still independently validated.
+Попытка — штатный assessment instance. Старый номер не создаёт событие; ID при том
+же номере не меняется. Набор выбранных вопросов внутри экземпляра сохраняется
+в native_attempts уже при первом валидном started, до законченной оценки,
+при повторных отправках, переоценке и после перезапуска. Привязка содержит
+instance/delivery/work и фиксированную assignment/activity scope. not-started
+не создаёт привязку. Отсутствие законченной
+оценки не меняет прежнюю Moodle grade.
 
-Events bind canonical trusted evidence, sorted qualified questions, the fixed
-assignment/activity scope and the preceding persistent revision. Observation and
-outbox insertion share a SQLite transaction. Consecutive identical polls reuse the
-committed event and payload; a legitimate A→B→A regrade creates a new revision even
-though its final content appeared earlier. Each outbox row
-persists user, activity/context, lineitem, delivery/version, payload and timestamp.
-New payload timestamps are monotonic per user/lineitem even within one polling
-second and remain identical on transport retry.
+Observation и outbox фиксируются одной SQLite транзакцией. Событие связывает
+достоверные данные, фиксированную activity/assignment scope и предыдущую ревизию.
+Повтор одинакового опроса возвращает прежнее событие и payload; A→B→A переоценка
+создаёт новую ревизию. Timestamp монотонен для user/lineitem, а транспортный retry
+сохраняет его. Перед отправкой повторно проверяются active assignment/version,
+delivery, latest attempt/revision и Moodle binding. Старые события становятся
+obsolete и не перезаписывают новую оценку. Expiring send lease защищает от
+конкурентной отправки и замены назначения, восстановление возможно после restart.
 
-Before claiming an event, the worker rechecks the current assignment/delivery and
-latest observed attempt/revision. Old assignment/delivery/attempt events become
-obsolete, with audit, and cannot overwrite newer scores after a delayed retry.
-Both persisted rows and evidence must match the service's currently configured
-delivery and instance; a restart with a different delivery cannot send old queued
-grades before explicit migration. Successful regrades below the pass threshold
-restore the assignment's assigned/approved state instead of retaining completed.
-An expiring persistent send lease permits restart recovery and serializes sends
-per user/lineitem. Failed delivery returns to pending with bounded exponential
-backoff; successful delivery becomes sent. Replacement never clears the existing
-Moodle score. It remains until a valid grade from the new activated defense arrives.
+Worker опрашивает Bridge по умолчанию каждые15 секунд, согласует durable ACL intent
+и затем отправляет outbox. OAuth использует фиксированный issuer/token endpoint,
+короткую RS256 client assertion и score scope. POST направляется только на
+зарегистрированный lineitem `/scores` с сохранением query, стандартным content type
+и стабильным Idempotency-Key. Redirects запрещены, TLS verification включён;
+401 сбрасывает token cache, транспортные ошибки повторяются с bounded backoff.
 
-AGS obtains an OAuth token through the fixed registered token endpoint using a
-short-lived RS256 client assertion signed by the private tool key, with the score
-scope. Score POSTs target only registered lineitems, append /scores while preserving
-Moodle's type_id query, use the prescribed content type and a stable Idempotency-Key.
-No redirects are followed. TLS uses the configured trusted CA, with no verification
-bypass. OAuth/transport failures are retryable; a 401 invalidates the token cache.
-
-`tools/check-integration.py` reads state counts/audit from a private existing SQLite
-database in read-only mode and returns failure for reconciling or undelivered rows.
-Its output explicitly says liveMoodleAcceptance=false. Actual Moodle AGS readback,
-two-user isolation, native direct-URL checks and course-upgrade preservation require
-the separate private integration receipts.
+При regrade ниже pass.at-least completed возвращается в assigned/approved.
+Замена назначения сохраняет прежнюю Moodle оценку до достоверного нового результата.
+Другая поставка и прежняя БД требуют нового состояния, автоматических миграций нет.
+`tools/check-integration.py` читает существующее состояние read-only и не подтверждает
+настоящую Moodle приёмку: она требует отдельного live readback и двух пользователей.

@@ -18,8 +18,11 @@ def person(store, subject="student-a", role="student"):
     return store.activate(pending["state"],"browser",1000,identity)
 
 def delivery():
-    policy={"schemaVersion":1,"mode":"required-question-completion","source":"per-question-results-v1","questionIds":["demo/exr-1","demo/exr-2","demo/exr-3"],"requiredQuestionIds":["demo/exr-1","demo/exr-2","demo/exr-3"],"atLeast":2,"fullyCompletedScore":1}
-    return {"deliveryHash":"a"*64,"courseId":"demo","questions":policy["questionIds"],"instances":{"pilot":{"works":["defense-a","defense-b","lab"]}},"works":[{"id":"defense-a","relatedExercise":"exr-essay-a","completion":policy},{"id":"defense-b","relatedExercise":"exr-essay-b","completion":policy},{"id":"lab","completion":policy}]}
+    def work(id,essay=None):
+        slots=[{'id':'demo/'+id+'/exr-'+str(i),'selection':'fixed','candidates':['demo/exr-'+str(i)],'assignment':{'requirement':'required','workMode':'individual'}} for i in (1,2,3)]
+        policy={'schemaVersion':2,'mode':'required-slot-completion','source':'per-slot-results-v2','slotIds':[s['id'] for s in slots],'requiredSlotIds':[s['id'] for s in slots],'atLeast':2,'fullyCompletedScore':1}
+        return {'id':id,'slots':slots,'completion':policy,**({'relatedExercise':essay} if essay else {})}
+    return {'schemaVersion':2,'deliveryHash':'a'*64,'courseId':'demo','questions':['demo/exr-'+str(i) for i in (1,2,3)],'instances':{'pilot':{'works':['defense-a','defense-b','lab']}},'works':[work('defense-a','exr-essay-a'),work('defense-b','exr-essay-b'),work('lab')]}
 
 @pytest.fixture
 def setup(tmp_path):

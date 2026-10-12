@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing reviewed version tag (for example v1.0.0)
+        description: Existing reviewed version tag (например v2.0.0)
         required: true
         type: string
 permissions:
@@ -71,6 +71,10 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Подтвердить отсутствие registry tag до публикации
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}:${{ inputs.tag }}
+        run: bash tools/require-absent-image.sh "$IMAGE"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         id: build
@@ -82,6 +86,10 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.image.outputs.revision }}
+      - name: Проверить загрузку опубликованного digest
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+        run: docker pull "$IMAGE"
       - name: Record published digest
         env:
           IMAGE_NAME: ${{ steps.image.outputs.name }}
@@ -98,13 +106,13 @@ jobs:
           if len(wheels) != 1:
               raise SystemExit('Expected exactly one release wheel')
           receipt = {
-              'schemaVersion': 1, 'versionTag': os.environ['RELEASE_TAG'],
+              'schemaVersion': 2, 'versionTag': os.environ['RELEASE_TAG'],
               'sourceCommit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
               'repository': os.environ['RELEASE_REPOSITORY'], 'platform': 'linux/amd64',
               'image': os.environ['IMAGE_NAME'] + '@' + digest,
-              'runtimeSchemaVersions': [1, 2],
+              'databaseSchemaVersion': 3, 'deliverySchemaVersion': 2, 'resultsSchemaVersion': 2, 'configurationSchemaVersion': 2,
               'wheel': {'name': wheels[0].name, 'sha256': hashlib.sha256(wheels[0].read_bytes()).hexdigest()},
-              'deliveryMigration': 'changed delivery fails closed; explicit migration deferred'
+              'previousSchemas': 'rejected; fresh database required'
           }
           pathlib.Path('dist/release-images.json').write_text(json.dumps(receipt, indent=2) + '\n')
           PY

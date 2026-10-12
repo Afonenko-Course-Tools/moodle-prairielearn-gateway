@@ -13,7 +13,7 @@ class AGS:
         self.sent.append((lineitem,copy.deepcopy(payload),key))
 
 def result(row, uid, scores=(1,1,0)):
-    return {"schemaVersion":1,"source":"per-question-results-v1","assignmentId":row["id"],"version":row["version"],"userUid":uid,"instance":"pilot","deliveryHash":"a"*64,"workId":row["work"],"currentAttempt":{"id":"attempt-a","number":1},"questions":[{"qualifiedId":"demo/exr-"+str(i+1),"score":score,"points":score*10,"maxPoints":10,"status":"complete"} for i,score in enumerate(scores)],"completion":{"completedRequired":sum(s==1 for s in scores),"requiredCount":3,"atLeast":2,"passed":sum(s==1 for s in scores)>=2}}
+    return {"schemaVersion":2,"source":"per-slot-results-v2","state":"started","assignmentId":row["id"],"version":row["version"],"userUid":uid,"instance":"pilot","deliveryHash":"a"*64,"workId":row["work"],"currentAttempt":{"id":"attempt-a","number":1},"slots":[{"slotId":"demo/"+row["work"]+"/exr-"+str(i+1),"qualifiedId":"demo/exr-"+str(i+1),"score":score,"points":score*10,"maxPoints":10,"status":"complete"} for i,score in enumerate(scores)],"completion":{"completedRequired":sum(s==1 for s in scores),"requiredCount":3,"atLeast":2,"passed":sum(s==1 for s in scores)>=2}}
 
 @pytest.fixture
 def setup(tmp_path):
@@ -36,7 +36,7 @@ async def test_weighted_partial_does_not_count_as_two(setup):
 @pytest.mark.anyio
 async def test_optional_full_score_does_not_replace_required(setup):
     _,student,_,assignments,grades,_=setup
-    assignments.works["defense-a"]["completion"]["requiredQuestionIds"]=["demo/exr-1","demo/exr-2"]
+    assignments.works["defense-a"]["completion"]["requiredSlotIds"]=["demo/defense-a/exr-1","demo/defense-a/exr-2"]
     row=await assignments.request(student,"exr-essay-a","a")
     evidence=result(row,student["uid"],(1,0,1));evidence["completion"]={"completedRequired":1,"requiredCount":2,"atLeast":2,"passed":False}
     assert grades.observe(row,evidence)["scoreGiven"]==1
@@ -87,9 +87,9 @@ async def test_closed_questions_completion_and_attempt_scope(setup):
     _,student,_,assignments,grades,_=setup;row=await assignments.request(student,"exr-essay-a","a")
     evidence=result(row,student["uid"]);evidence["completion"]["completedRequired"]=3
     with pytest.raises(GatewayError): grades.observe(row,evidence)
-    evidence=result(row,student["uid"]);evidence["questions"][1]=evidence["questions"][0]
+    evidence=result(row,student["uid"]);evidence["slots"][1]=evidence["slots"][0]
     with pytest.raises(GatewayError): grades.observe(row,evidence)
-    evidence=result(row,student["uid"]);evidence["currentAttempt"]["number"]=2;grades.observe(row,evidence)
+    evidence=result(row,student["uid"]);evidence["currentAttempt"]={"id":"attempt-b","number":2};grades.observe(row,evidence)
     assert grades.observe(row,result(row,student["uid"])) is None
 
 @pytest.mark.anyio

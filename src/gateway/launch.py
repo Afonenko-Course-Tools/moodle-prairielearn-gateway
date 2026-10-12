@@ -10,6 +10,11 @@ INSTRUCTOR = "http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"
 AGS = "https://purl.imsglobal.org/spec/lti-ags/claim/endpoint"
 SCORE_SCOPE = "https://purl.imsglobal.org/spec/lti-ags/scope/score"
 
+class LaunchClaimsRegistry(jwt.JWTClaimsRegistry):
+    def validate_iat(self,value):
+        if type(value) is not int or value>self.now+5: raise LaunchError('Issuer clock skew rejected')
+        self.check_value('iat',value)
+
 class LaunchService:
     def __init__(self, store, registration, clock=time.time):
         self.store, self.registration, self.clock = store, registration, clock
@@ -28,8 +33,8 @@ class LaunchService:
             header, c = token.header, token.claims
             if header.get("alg") != "RS256" or not header.get("kid") or sum(k.get("kid")==header["kid"] for k in jwks["keys"]) != 1 or any(k in header for k in ("jku","jwk","x5u","x5c")):
                 raise LaunchError()
-            jwt.JWTClaimsRegistry(now=now, leeway=0, iss={"essential":True,"value":r["issuer"]}, aud={"essential":True,"value":r["clientId"]}, sub={"essential":True}, exp={"essential":True}, iat={"essential":True}, nonce={"essential":True,"value":pending["nonce"]}).validate(c)
-            if any(type(c[k]) is not int for k in ("iat","exp")) or c["iat"] > now+5 or c["iat"] < now-300 or c["exp"] > c["iat"]+600 or c["exp"] <= c["iat"]:
+            LaunchClaimsRegistry(now=now, leeway=0, iss={"essential":True,"value":r["issuer"]}, aud={"essential":True,"value":r["clientId"]}, sub={"essential":True}, exp={"essential":True}, iat={"essential":True}, nonce={"essential":True,"value":pending["nonce"]}).validate(c)
+            if any(type(c[k]) is not int for k in ("iat","exp")) or c["iat"] > now+5 or c["iat"] < now-300 or c["exp"] > c["iat"]+600 or c["exp"] <= now or c["exp"] <= c["iat"]:
                 raise LaunchError()
             aud = c["aud"]
             if not isinstance(aud, (str,list)) or isinstance(aud,list) and (not aud or any(not isinstance(v,str) for v in aud) or len(aud)>1 and c.get("azp")!=r["clientId"]): raise LaunchError()

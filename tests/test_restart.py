@@ -17,18 +17,18 @@ def test_atomic_concurrent_capacity_and_duplicate_selection(tmp_path):
     assert sorted(outcomes)==["assigned","conflict"]
     with Store(store.path).connect() as db:assert db.execute("SELECT count(*) FROM assignments").fetchone()[0]==1
 
-def test_migrations_and_expired_auth_after_restart(tmp_path):
+def test_current_schema_and_expired_auth_after_restart(tmp_path):
     store=Store(tmp_path/"runtime.sqlite");who=person(store)
     restarted=Store(store.path)
     assert restarted.session(who["token"],1001)["subject"]=="student-a"
     with pytest.raises(GatewayError):restarted.session(who["token"],4600)
-    with restarted.connect() as db:assert [r[0] for r in db.execute("SELECT version FROM schema_versions ORDER BY version")]==[1,2]
+    with restarted.connect() as db:assert [r[0] for r in db.execute("SELECT version FROM schema_versions ORDER BY version")]==[3]
 
-def test_concurrent_startup_migrations_are_serialized(tmp_path):
+def test_concurrent_fresh_schema_creations_are_serialized(tmp_path):
     path=tmp_path/"fresh.sqlite";barrier=Barrier(8)
     def start(_):
         barrier.wait()
         return Store(path)
     with ThreadPoolExecutor(8) as pool: stores=list(pool.map(start,range(8)))
     with stores[0].connect() as db:
-        assert [r[0] for r in db.execute("SELECT version FROM schema_versions ORDER BY version")]==[1,2]
+        assert [r[0] for r in db.execute("SELECT version FROM schema_versions ORDER BY version")]==[3]

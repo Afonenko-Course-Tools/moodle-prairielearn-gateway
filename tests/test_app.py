@@ -30,45 +30,45 @@ def setup(tmp_path):
 async def test_session_required_no_supplied_uid_or_grade_api(setup):
     app,store,student,teacher=setup
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url="https://course.example") as c:
-        assert (await c.get("/gateway/my/works",headers={"X-Gateway-User":student["uid"]})).status_code==403
-        assert (await c.post("/gateway/grades",json={"score":1})).status_code==404
+        assert (await c.get("/gateway/courses/demo/my/works",headers={"X-Gateway-User":student["uid"]})).status_code==403
+        assert (await c.post("/gateway/courses/demo/grades",json={"score":1})).status_code==404
         c.cookies.set("GatewaySession",student["token"])
-        response=await c.get("/gateway/my/works")
+        response=await c.get("/gateway/courses/demo/my/works")
         assert response.status_code==200 and [w["id"] for w in response.json()["works"]]==["lab"]
         headers={"Origin":"https://course.example","X-CSRF-Token":student["csrf"]}
-        assert (await c.post("/gateway/assignments/request",headers=headers,json={"essayId":"exr-essay-a","idempotencyKey":"a","userUid":"foreign"})).status_code==422
+        assert (await c.post("/gateway/courses/demo/assignments/request",headers=headers,json={"essayId":"exr-essay-a","idempotencyKey":"a","userUid":"foreign"})).status_code==422
 
 @pytest.mark.anyio
 async def test_csrf_teacher_scope_and_api_assignment(setup):
     app,store,student,teacher=setup
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url="https://course.example",cookies={"GatewaySession":student["token"]}) as c:
         body={"essayId":"exr-essay-a","idempotencyKey":"a"}
-        assert (await c.post("/gateway/assignments/request",json=body)).status_code==403
+        assert (await c.post("/gateway/courses/demo/assignments/request",json=body)).status_code==403
         headers={"Origin":"https://evil.example","X-CSRF-Token":student["csrf"]}
-        assert (await c.post("/gateway/assignments/request",headers=headers,json=body)).status_code==403
+        assert (await c.post("/gateway/courses/demo/assignments/request",headers=headers,json=body)).status_code==403
         headers["Origin"]="https://course.example"
-        created=await c.post("/gateway/assignments/request",headers=headers,json=body)
+        created=await c.post("/gateway/courses/demo/assignments/request",headers=headers,json=body)
         assert created.status_code==200 and created.json()["state"]=="assigned"
-        assert (await c.post("/gateway/teacher/assignments/"+created.json()["id"]+"/approve",headers=headers,json={})).status_code==403
+        assert (await c.post("/gateway/courses/demo/teacher/assignments/"+created.json()["id"]+"/approve",headers=headers,json={})).status_code==403
 
 @pytest.mark.anyio
 async def test_private_oneuse_handoff_requires_service_auth(setup):
     app,store,student,_=setup
-    token=store.handoff(student["token"],"/gateway/bootstrap",1000)
+    token=store.handoff(student["token"],"/gateway/courses/demo/bootstrap",1000)
     app.state.handoff_secret="s"*32
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url="https://course.example") as c:
-        path="/internal/handoff/"+token
+        path="/internal/handoff/courses/demo/"+token
         assert (await c.get(path,headers={"X-Gateway-User":"forged"})).status_code==403
         first=await c.get(path,headers={"Authorization":"Bearer "+"s"*32})
         assert first.status_code==200 and first.json()["uid"]==student["uid"] and "role" not in first.json()
-        assert first.headers["x-verified-uid"]==student["uid"] and first.headers["x-verified-target"]=="/gateway/bootstrap"
+        assert first.headers["x-verified-uid"]==student["uid"] and first.headers["x-verified-target"]=="/gateway/courses/demo/bootstrap"
         assert (await c.get(path,headers={"Authorization":"Bearer "+"s"*32})).status_code==403
 
 @pytest.mark.anyio
 async def test_safe_work_ui_no_unready_defense(setup):
     app,_,student,_=setup
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url="https://course.example",cookies={"GatewaySession":student["token"]}) as c:
-        response=await c.get("/gateway/")
+        response=await c.get("/gateway/courses/demo/")
         assert response.status_code==200 and "Мои работы" in response.text and "innerHTML" not in response.text
 
 @pytest.mark.anyio
@@ -86,23 +86,23 @@ async def test_real_signed_http_launch_cookie_binding_bootstrap_and_replay(tmp_p
     clients=Clients();clients.bridge.enroll=enroll
     app=create_app(config,delivery=delivery(),clients=clients,clock=lambda:1000,start_worker=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url="https://course.example") as http:
-        response=await http.get("/gateway/lti/login",params={"iss":"https://moodle.example","client_id":"client","target_link_uri":"https://course.example/gateway/lti/launch","login_hint":"signed-hint","lti_message_hint":"fixed-message"})
+        response=await http.get("/gateway/courses/demo/lti/login",params={"iss":"https://moodle.example","client_id":"client","target_link_uri":"https://course.example/gateway/courses/demo/lti/launch","login_hint":"signed-hint","lti_message_hint":"fixed-message"})
         assert response.status_code==303 and "Secure" in response.headers["set-cookie"] and "SameSite=none" in response.headers["set-cookie"]
         oidc=httpx.URL(response.headers["location"]).params
-        claims={"iss":"https://moodle.example","aud":"client","sub":"synthetic-student","iat":990,"exp":1100,"nonce":oidc["nonce"],"name":"Студент","https://purl.imsglobal.org/spec/lti-ags/claim/endpoint":{"lineitem":"https://moodle.example/lineitems/defense","scope":[SCORE_SCOPE]},LTI+"deployment_id":"deploy",LTI+"context":{"id":"context"},LTI+"resource_link":{"id":"resource"},LTI+"roles":[LEARNER],LTI+"message_type":"LtiResourceLinkRequest",LTI+"version":"1.3.0",LTI+"target_link_uri":"https://course.example/gateway/lti/launch"}
+        claims={"iss":"https://moodle.example","aud":"client","sub":"synthetic-student","iat":990,"exp":1100,"nonce":oidc["nonce"],"name":"Студент","https://purl.imsglobal.org/spec/lti-ags/claim/endpoint":{"lineitem":"https://moodle.example/lineitems/defense","scope":[SCORE_SCOPE]},LTI+"deployment_id":"deploy",LTI+"context":{"id":"context"},LTI+"resource_link":{"id":"resource"},LTI+"roles":[LEARNER],LTI+"message_type":"LtiResourceLinkRequest",LTI+"version":"1.3.0",LTI+"target_link_uri":"https://course.example/gateway/courses/demo/lti/launch"}
         body={"state":oidc["state"],"id_token":jwt.encode({"alg":"RS256","kid":key.kid},claims,key,algorithms=["RS256"])}
-        launched=await http.post("/gateway/lti/launch",data=body,headers={"X-Gateway-User":"administrator@example.invalid"})
-        assert launched.status_code==303 and launched.headers["location"].startswith("/gateway/pl/")
+        launched=await http.post("/gateway/courses/demo/lti/launch",data=body,headers={"X-Gateway-User":"administrator@example.invalid"})
+        assert launched.status_code==303 and launched.headers["location"].startswith("/gateway/courses/demo/pl/")
         cookies=launched.headers.get_list("set-cookie")
         assert any("GatewaySession=" in cookie and "Secure" in cookie and "HttpOnly" in cookie for cookie in cookies)
         assert http.cookies.get("GatewayBinding") is None
         who=app.state.store.session(http.cookies["GatewaySession"],1000)
         assert who["subject"]=="synthetic-student" and who["uid"].endswith("@example.invalid")
-        assert (await http.get("/gateway/bootstrap")).status_code==303
+        assert (await http.get("/gateway/courses/demo/bootstrap")).status_code==303
         assert enrolled==[(who["uid"],"pilot","a"*64)]
         app.state.handoff_secret="s"*32
         handoff=launched.headers["location"].split("/")[-1]
-        reply=await http.get("/internal/handoff/"+handoff,headers={"Authorization":"Bearer "+"s"*32})
-        assert reply.headers["x-verified-target"]=="/gateway/bootstrap" and reply.headers["x-verified-name"]=="Moodle participant"
+        reply=await http.get("/internal/handoff/courses/demo/"+handoff,headers={"Authorization":"Bearer "+"s"*32})
+        assert reply.headers["x-verified-target"]=="/gateway/courses/demo/bootstrap" and reply.headers["x-verified-name"]=="Moodle participant"
         assert reply.json()["displayName"]=="Студент" and "role" not in reply.json()
-        assert (await http.post("/gateway/lti/launch",data=body)).status_code==403
+        assert (await http.post("/gateway/courses/demo/lti/launch",data=body)).status_code==403
