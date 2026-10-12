@@ -82,3 +82,16 @@ def test_identity_tuple_and_missing_enrollment(env):
 def test_handoff_rejects_unscoped_or_control_targets(env,target):
     session,_,_=attempt(env)
     with pytest.raises(LaunchError):env[0].handoff(session["token"],target,1000)
+
+@pytest.mark.parametrize("client", ["", "unknown"])
+def test_explicit_unregistered_login_client_rejected(env, client):
+    with pytest.raises(LaunchError):
+        env[1].begin("https://moodle.example", client, "https://course.example/gateway/lti/launch", "hint", "message", "browser")
+
+@pytest.mark.parametrize("issuer,target", [
+    ("https://other.example", "https://course.example/gateway/lti/launch"),
+    ("https://moodle.example", "https://other.example/lti/launch"),
+])
+def test_login_without_client_still_requires_registered_issuer_and_target(env, issuer, target):
+    with pytest.raises(LaunchError):
+        env[1].begin(issuer, None, target, "hint", "message", "browser")

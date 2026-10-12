@@ -21,7 +21,7 @@ class LaunchService:
 
     def begin(self, issuer, client, target, hint, message, binding):
         r = self.registration
-        if issuer != r["issuer"] or client != r["clientId"] or target != r["targetLinkUri"] or not hint or not message or not binding:
+        if issuer != r["issuer"] or (client is not None and client != r["clientId"]) or target != r["targetLinkUri"] or not hint or not message or not binding:
             raise LaunchError("Login registration/binding rejected")
         return self.store.state(binding, int(self.clock()))
 

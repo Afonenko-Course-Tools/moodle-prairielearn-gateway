@@ -72,7 +72,8 @@ async def test_safe_work_ui_no_unready_defense(setup):
         assert response.status_code==200 and "Мои работы" in response.text and "innerHTML" not in response.text
 
 @pytest.mark.anyio
-async def test_real_signed_http_launch_cookie_binding_bootstrap_and_replay(tmp_path):
+@pytest.mark.parametrize("client_id", ["client", None])
+async def test_real_signed_http_launch_cookie_binding_bootstrap_and_replay(tmp_path, client_id):
     config=example();config["database"]=str(tmp_path/"http.sqlite")
     key=RSAKey.generate_key(parameters={"kid":"synthetic-moodle"})
     class Clients:
@@ -86,9 +87,12 @@ async def test_real_signed_http_launch_cookie_binding_bootstrap_and_replay(tmp_p
     clients=Clients();clients.bridge.enroll=enroll
     app=create_app(config,delivery=delivery(),clients=clients,clock=lambda:1000,start_worker=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url="https://course.example") as http:
-        response=await http.get("/gateway/courses/demo/lti/login",params={"iss":"https://moodle.example","client_id":"client","target_link_uri":"https://course.example/gateway/courses/demo/lti/launch","login_hint":"signed-hint","lti_message_hint":"fixed-message"})
+        params={"iss":"https://moodle.example","target_link_uri":"https://course.example/gateway/courses/demo/lti/launch","login_hint":"signed-hint","lti_message_hint":"fixed-message"}
+        if client_id is not None: params["client_id"]=client_id
+        response=await http.get("/gateway/courses/demo/lti/login",params=params)
         assert response.status_code==303 and "Secure" in response.headers["set-cookie"] and "SameSite=none" in response.headers["set-cookie"]
         oidc=httpx.URL(response.headers["location"]).params
+        assert oidc["client_id"] == "client"
         claims={"iss":"https://moodle.example","aud":"client","sub":"synthetic-student","iat":990,"exp":1100,"nonce":oidc["nonce"],"name":"Студент","https://purl.imsglobal.org/spec/lti-ags/claim/endpoint":{"lineitem":"https://moodle.example/lineitems/defense","scope":[SCORE_SCOPE]},LTI+"deployment_id":"deploy",LTI+"context":{"id":"context"},LTI+"resource_link":{"id":"resource"},LTI+"roles":[LEARNER],LTI+"message_type":"LtiResourceLinkRequest",LTI+"version":"1.3.0",LTI+"target_link_uri":"https://course.example/gateway/courses/demo/lti/launch"}
         body={"state":oidc["state"],"id_token":jwt.encode({"alg":"RS256","kid":key.kid},claims,key,algorithms=["RS256"])}
         launched=await http.post("/gateway/courses/demo/lti/launch",data=body,headers={"X-Gateway-User":"administrator@example.invalid"})
