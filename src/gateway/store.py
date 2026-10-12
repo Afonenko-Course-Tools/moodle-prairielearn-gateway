@@ -72,7 +72,7 @@ class Store:
                 try:
                     with sqlite3.connect(self.path.as_uri()+'?mode=ro',uri=True) as check:
                         versions=[row[0] for row in check.execute('SELECT version FROM schema_versions')]
-                        if versions!=[3]:raise GatewayError('Unsupported Gateway database schema; create a fresh v3 database')
+                        if versions!=[3] or [row[1] for row in check.execute('PRAGMA table_info(native_attempts)')]!=['scope','version','instance','delivery','work','attempt_id','attempt_number','selection']:raise GatewayError('Unsupported Gateway database schema; create a fresh v3 database')
                 except sqlite3.DatabaseError as error:raise GatewayError('Unsupported Gateway database schema') from error
             with self.connect() as db:
                 self._enable_wal(db)

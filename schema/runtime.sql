@@ -52,3 +52,9 @@ CREATE TABLE IF NOT EXISTS activity_bindings(
  context TEXT NOT NULL, resource TEXT NOT NULL, lineitem TEXT NOT NULL,
  PRIMARY KEY(user_id,activity)
 );
+CREATE TABLE native_attempts(
+ scope TEXT NOT NULL, version INTEGER NOT NULL, instance TEXT NOT NULL,
+ delivery TEXT NOT NULL, work TEXT NOT NULL, attempt_id TEXT NOT NULL,
+ attempt_number INTEGER NOT NULL, selection TEXT NOT NULL,
+ PRIMARY KEY(scope,version,attempt_number), UNIQUE(scope,version,attempt_id)
+);

@@ -89,7 +89,7 @@ async def test_closed_questions_completion_and_attempt_scope(setup):
     with pytest.raises(GatewayError): grades.observe(row,evidence)
     evidence=result(row,student["uid"]);evidence["slots"][1]=evidence["slots"][0]
     with pytest.raises(GatewayError): grades.observe(row,evidence)
-    evidence=result(row,student["uid"]);evidence["currentAttempt"]["number"]=2;grades.observe(row,evidence)
+    evidence=result(row,student["uid"]);evidence["currentAttempt"]={"id":"attempt-b","number":2};grades.observe(row,evidence)
     assert grades.observe(row,result(row,student["uid"])) is None
 
 @pytest.mark.anyio

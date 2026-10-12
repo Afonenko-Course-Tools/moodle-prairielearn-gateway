@@ -59,11 +59,19 @@ class Grades:
         if evidence['state'] not in ('started','not-started') or (evidence['state']=='not-started')!=(evidence['currentAttempt'] is None):raise GatewayError('Native state/attempt mismatch',503)
         return evidence['state']=='not-started'
 
-    def _same_selection(self,latest,evidence):
-        if latest and latest['attempt_number']==evidence['currentAttempt']['number']:
-            prior=json.loads(latest['data'])
-            if prior['currentAttempt']['id']!=evidence['currentAttempt']['id']:raise GatewayError('Conflicting current attempt',503)
-            if {(s['slotId'],s['qualifiedId']) for s in prior['slots']}!={(s['slotId'],s['qualifiedId']) for s in evidence['slots']}:raise GatewayError('Selected question changed within native attempt',503)
+    def _bind_attempt(self,db,identifier,version,evidence):
+        attempt=evidence['currentAttempt']
+        selection=json.dumps(sorted((s['slotId'],s['qualifiedId']) for s in evidence['slots']))
+        rows=db.execute('SELECT * FROM native_attempts WHERE scope=? AND version=? ORDER BY attempt_number DESC',(identifier,version)).fetchall()
+        prior=next((row for row in rows if row['attempt_number']==attempt['number'] or row['attempt_id']==attempt['id']),None)
+        if prior:
+            if prior['attempt_id']!=attempt['id'] or prior['attempt_number']!=attempt['number']:raise GatewayError('Conflicting current attempt',503)
+            if prior['selection']!=selection:raise GatewayError('Selected question changed within native attempt',503)
+            if any(prior[key]!=evidence[field] for key,field in [('instance','instance'),('delivery','deliveryHash'),('work','workId')]):raise GatewayError('Conflicting native attempt scope',503)
+        if rows and attempt['number']<rows[0]['attempt_number']:return False
+        if not prior:
+            db.execute('INSERT INTO native_attempts VALUES(?,?,?,?,?,?,?,?)',(identifier,version,evidence['instance'],evidence['deliveryHash'],evidence['workId'],attempt['id'],attempt['number'],selection))
+        return True
 
     def observe(self, assignment, evidence):
         closed(evidence,{"schemaVersion","source","assignmentId","version","userUid","instance","deliveryHash","workId","currentAttempt","slots","completion","state"})
@@ -84,10 +92,10 @@ class Grades:
             if attempt is None: return None
             closed(attempt,{"id","number"})
             if not isinstance(attempt["id"],str) or not attempt["id"] or type(attempt["number"]) is not int or attempt["number"]<1: raise GatewayError("Invalid current attempt",503)
+            if not self._bind_attempt(db,current["id"],current["version"],evidence):return None
             latest=db.execute("SELECT event_id,attempt_number,data FROM observations WHERE assignment_id=? AND version=? ORDER BY attempt_number DESC,rowid DESC LIMIT 1",(current["id"],current["version"])).fetchone()
             if latest and attempt["number"]<latest["attempt_number"]:
                 self.store.audit(db,"old-attempt-ignored",current["id"],attempt,now);return None
-            self._same_selection(latest,evidence)
             if not any(q["status"]=="complete" and q["score"] is not None for q in evidence["slots"]): return None
             stable={**evidence,"slots":sorted(evidence["slots"],key=lambda q:q["slotId"])}
             return self._record(db,stable,latest,current["id"],current["version"],current,computed["completedRequired"],computed["requiredCount"],now)
@@ -115,14 +123,15 @@ class Grades:
             if attempt is None: return None
             closed(attempt,{"id","number"})
             if not isinstance(attempt["id"],str) or not attempt["id"] or type(attempt["number"]) is not int or attempt["number"]<1: raise GatewayError("Invalid native lab attempt",503)
+            identifier=self._lab_id(current["user_id"],current["activity"])
             given,maximum=evidence["scoreGiven"],evidence["scoreMaximum"]
+            if given is not None and maximum is not None and (not number(given) or not number(maximum) or not 0<=given<=maximum or maximum<=0):raise GatewayError("Invalid declared native lab score",503)
+            if not self._bind_attempt(db,identifier,1,evidence):return None
             if given is None or maximum is None: return None
             if not number(given) or not number(maximum) or not 0<=given<=maximum or maximum<=0: raise GatewayError("Invalid declared native lab score",503)
             if not any(q["status"]=="complete" and q["score"] is not None for q in evidence["slots"]): return None
-            identifier=self._lab_id(current["user_id"],current["activity"])
             latest=db.execute("SELECT event_id,attempt_number,data FROM observations WHERE assignment_id=? ORDER BY attempt_number DESC,rowid DESC LIMIT 1",(identifier,)).fetchone()
             if latest and attempt["number"]<latest["attempt_number"]: return None
-            self._same_selection(latest,evidence)
             stable={**evidence,"slots":sorted(evidence["slots"],key=lambda q:q["slotId"])}
             return self._record(db,stable,latest,identifier,1,current,given,maximum,now)
 
@@ -146,8 +155,10 @@ class Grades:
                 if current:
                     try:self.assignments._binding(current)
                     except GatewayError:valid=False
-                latest=db.execute("SELECT event_id,data FROM observations WHERE assignment_id=? AND version=? ORDER BY attempt_number DESC,rowid DESC LIMIT 1",(row["assignment_id"],row["version"])).fetchone()
+                latest=db.execute("SELECT event_id,attempt_number,data FROM observations WHERE assignment_id=? AND version=? ORDER BY attempt_number DESC,rowid DESC LIMIT 1",(row["assignment_id"],row["version"])).fetchone()
                 valid=valid and row["delivery"]==self.assignments.delivery["deliveryHash"] and latest and latest["event_id"]==event_id and json.loads(latest["data"])["instance"]==self.assignments.instance
+                bound=db.execute('SELECT attempt_number FROM native_attempts WHERE scope=? AND version=? ORDER BY attempt_number DESC LIMIT 1',(row['assignment_id'],row['version'])).fetchone()
+                valid=valid and bound and latest['attempt_number']==bound['attempt_number']
                 if not valid:
                     db.execute("UPDATE outbox SET state='obsolete' WHERE id=?",(event_id,));self.store.audit(db,"old-outbox-ignored",event_id,{},now);continue
                 if db.execute("SELECT 1 FROM outbox WHERE id!=? AND user_id=? AND lineitem=? AND state='sending' AND lease_until>?",(event_id,row["user_id"],row["lineitem"],now)).fetchone(): continue
