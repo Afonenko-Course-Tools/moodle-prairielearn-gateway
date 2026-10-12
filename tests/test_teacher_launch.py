@@ -31,33 +31,33 @@ def admin_setup(tmp_path):
 async def test_owner_admin_handoff_and_bootstrap(admin_setup):
     app,store,owner,_,_,granted=admin_setup
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url='https://course.example',cookies={'GatewaySession':owner['token']}) as c:
-        assert (await c.get('/gateway/my/works')).json()['administrator'] is True
+        assert (await c.get('/gateway/courses/demo/my/works')).json()['administrator'] is True
         headers={'Origin':'https://course.example','X-CSRF-Token':owner['csrf']}
-        assert (await c.post('/gateway/launch/administrator',json={})).status_code==403
-        response=await c.post('/gateway/launch/administrator',json={},headers=headers)
+        assert (await c.post('/gateway/courses/demo/launch/administrator',json={})).status_code==403
+        response=await c.post('/gateway/courses/demo/launch/administrator',json={},headers=headers)
         assert response.status_code==200
-        target=response.json()['url'];assert target.startswith('/gateway/pl/') and not granted
-        handoff=await c.get('/internal/handoff/'+target.split('/')[-1],headers={'Authorization':'Bearer '+'s'*32})
-        assert handoff.json()['uid']==owner['uid'] and handoff.json()['target']=='/gateway/administrator-bootstrap'
-        assert (await c.get('/internal/handoff/'+target.split('/')[-1],headers={'Authorization':'Bearer '+'s'*32})).status_code==403
-        bootstrap=await c.get('/gateway/administrator-bootstrap')
+        target=response.json()['url'];assert target.startswith('/gateway/courses/demo/pl/') and not granted
+        handoff=await c.get('/internal/handoff/courses/demo/'+target.split('/')[-1],headers={'Authorization':'Bearer '+'s'*32})
+        assert handoff.json()['uid']==owner['uid'] and handoff.json()['target']=='/gateway/courses/demo/administrator-bootstrap'
+        assert (await c.get('/internal/handoff/courses/demo/'+target.split('/')[-1],headers={'Authorization':'Bearer '+'s'*32})).status_code==403
+        bootstrap=await c.get('/gateway/courses/demo/administrator-bootstrap')
         assert bootstrap.headers['location']=='/pl/administrator/courses'
         assert 'pl2_access_as_administrator=active' in bootstrap.headers['set-cookie']
         assert 'Secure' in bootstrap.headers['set-cookie'] and 'HttpOnly' in bootstrap.headers['set-cookie']
         assert granted==[owner['uid']]
-        assert (await c.post('/gateway/launch/administrator',json={'userUid':'forged'},headers=headers)).status_code==422
+        assert (await c.post('/gateway/courses/demo/launch/administrator',json={'userUid':'forged'},headers=headers)).status_code==422
 
 @pytest.mark.anyio
 async def test_only_owner_verified_teacher_can_get_admin(admin_setup):
     app,store,owner,other,student,granted=admin_setup
     for who in [other,student]:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url='https://course.example',cookies={'GatewaySession':who['token']}) as c:
-            assert (await c.get('/gateway/my/works')).json()['administrator'] is False
+            assert (await c.get('/gateway/courses/demo/my/works')).json()['administrator'] is False
             headers={'Origin':'https://course.example','X-CSRF-Token':who['csrf']}
-            assert (await c.post('/gateway/launch/administrator',json={},headers=headers)).status_code==403
-            assert (await c.get('/gateway/administrator-bootstrap')).status_code==403
+            assert (await c.post('/gateway/courses/demo/launch/administrator',json={},headers=headers)).status_code==403
+            assert (await c.get('/gateway/courses/demo/administrator-bootstrap')).status_code==403
     assert not granted
-    with pytest.raises(LaunchError):store.handoff(student['token'],'/gateway/administrator-bootstrap',1000)
+    with pytest.raises(LaunchError):store.handoff(student['token'],'/gateway/courses/demo/administrator-bootstrap',1000)
 
 @pytest.mark.anyio
 async def test_changed_registration_or_expired_session_never_grants_admin(admin_setup):
@@ -67,9 +67,9 @@ async def test_changed_registration_or_expired_session_never_grants_admin(admin_
             old=db.execute('SELECT '+column+' FROM users WHERE id=?',(owner['userId'],)).fetchone()[0]
             db.execute('UPDATE users SET '+column+'=? WHERE id=?',('different',owner['userId']))
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url='https://course.example',cookies={'GatewaySession':owner['token']}) as c:
-            assert (await c.get('/gateway/administrator-bootstrap')).status_code==403
+            assert (await c.get('/gateway/courses/demo/administrator-bootstrap')).status_code==403
         with store.transaction() as db:db.execute('UPDATE users SET '+column+'=? WHERE id=?',(old,owner['userId']))
     with store.transaction() as db:db.execute('UPDATE sessions SET expires=999')
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url='https://course.example',cookies={'GatewaySession':owner['token']}) as c:
-        assert (await c.get('/gateway/administrator-bootstrap')).status_code==403
+        assert (await c.get('/gateway/courses/demo/administrator-bootstrap')).status_code==403
     assert not granted

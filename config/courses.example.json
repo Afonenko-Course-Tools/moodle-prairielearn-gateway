@@ -2,7 +2,6 @@
   "schemaVersion": 2,
   "courses": {
     "java": {
-      "schemaVersion": 1,
       "publicOrigin": "https://course.example",
       "database": "/var/lib/gateway/java.sqlite",
       "privateKeyFile": "/run/secrets/gateway-private-key.json",
@@ -47,7 +46,6 @@
       "routePrefix": "/gateway/courses/java"
     },
     "system-practice": {
-      "schemaVersion": 1,
       "publicOrigin": "https://course.example",
       "database": "/var/lib/gateway/system-practice.sqlite",
       "privateKeyFile": "/run/secrets/gateway-private-key.json",

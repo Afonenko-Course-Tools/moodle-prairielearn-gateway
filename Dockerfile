@@ -4,7 +4,7 @@ WORKDIR /app
 COPY requirements.lock /app/requirements.lock
 RUN python -m pip install --no-cache-dir --no-deps -r /app/requirements.lock
 COPY src /app/src
-COPY migrations /app/migrations
+COPY schema /app/schema
 COPY tools/run-gateway.py /app/tools/run-gateway.py
 USER 1000:1000
 EXPOSE 18080

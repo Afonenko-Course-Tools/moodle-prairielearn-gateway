@@ -39,22 +39,34 @@ class Grades:
         db.execute("INSERT INTO outbox(id,assignment_id,version,user_id,context,resource,delivery,lineitem,payload,created) VALUES(?,?,?,?,?,?,?,?,?,?)",(event_id,identifier,version,binding["user_id"],binding["context"],binding["resource"],self.assignments.delivery["deliveryHash"],binding["lineitem"],json.dumps(payload,sort_keys=True),now))
         return payload
 
-    def _questions(self, policy, evidence):
-        ids=policy["questionIds"]; required=policy["requiredQuestionIds"]
-        if not isinstance(evidence,list) or len(evidence)!=len(ids): raise GatewayError("Exact scoped questions required",503)
-        rows={}
+    def _slots(self, work, evidence, *, not_started=False):
+        policy=work['completion'];ids=policy['slotIds'];required=policy['requiredSlotIds']
+        if not isinstance(evidence,list) or len(evidence)!=(0 if not_started else len(ids)):raise GatewayError('Exact assigned slots required',503)
+        rows={};chosen=set()
         for row in evidence:
-            closed(row,{"qualifiedId","score","points","maxPoints","status"})
-            key=row["qualifiedId"]
-            if key not in ids or key in rows or row["status"] not in ("complete","grading","unanswered") or row["score"] is not None and (not number(row["score"]) or not 0<=row["score"]<=1): raise GatewayError("Invalid scoped question",503)
-            for field in ("points","maxPoints"):
-                if row[field] is not None and not number(row[field]): raise GatewayError("Invalid native points",503)
-            rows[key]=row
-        completed=sum(rows[q]["status"]=="complete" and rows[q]["score"]==1 for q in required)
-        return {"completedRequired":completed,"requiredCount":len(required),"atLeast":policy["atLeast"],"passed":completed>=policy["atLeast"]}
+            closed(row,{'slotId','qualifiedId','score','points','maxPoints','status'})
+            key=row['slotId'];slot=next((s for s in work['slots'] if s['id']==key),None)
+            if not slot or key in rows or row['qualifiedId'] not in slot['candidates'] or row['qualifiedId'] in chosen or row['status'] not in ('complete','grading','unanswered') or row['score'] is not None and (not number(row['score']) or not 0<=row['score']<=1):raise GatewayError('Invalid selected slot question',503)
+            for field in ('points','maxPoints'):
+                if row[field] is not None and (not number(row[field]) or row[field]<0):raise GatewayError('Invalid native points',503)
+            if row['points'] is not None and row['maxPoints'] is not None and row['points']>row['maxPoints']:raise GatewayError('Native points exceed maximum',503)
+            if row['status']=='complete' and row['score']==1 and (row['points'] is None or row['maxPoints'] is None or row['maxPoints']<=0 or row['points']!=row['maxPoints']):raise GatewayError('Incomplete full native result',503)
+            rows[key]=row;chosen.add(row['qualifiedId'])
+        completed=sum(rows.get(q,{}).get('status')=='complete' and rows[q]['score']==1 for q in required if q in rows)
+        return {'completedRequired':completed,'requiredCount':len(required),'atLeast':policy['atLeast'],'passed':completed>=policy['atLeast']}
+
+    def _state(self,evidence):
+        if evidence['state'] not in ('started','not-started') or (evidence['state']=='not-started')!=(evidence['currentAttempt'] is None):raise GatewayError('Native state/attempt mismatch',503)
+        return evidence['state']=='not-started'
+
+    def _same_selection(self,latest,evidence):
+        if latest and latest['attempt_number']==evidence['currentAttempt']['number']:
+            prior=json.loads(latest['data'])
+            if prior['currentAttempt']['id']!=evidence['currentAttempt']['id']:raise GatewayError('Conflicting current attempt',503)
+            if {(s['slotId'],s['qualifiedId']) for s in prior['slots']}!={(s['slotId'],s['qualifiedId']) for s in evidence['slots']}:raise GatewayError('Selected question changed within native attempt',503)
 
     def observe(self, assignment, evidence):
-        closed(evidence,{"schemaVersion","source","assignmentId","version","userUid","instance","deliveryHash","workId","currentAttempt","questions","completion"})
+        closed(evidence,{"schemaVersion","source","assignmentId","version","userUid","instance","deliveryHash","workId","currentAttempt","slots","completion","state"})
         now=int(self.clock())
         with self.store.transaction() as db:
             current=db.execute("SELECT a.*,u.uid,u.subject FROM assignments a JOIN users u ON u.id=a.user_id WHERE a.id=?",(assignment["id"],)).fetchone()
@@ -62,10 +74,10 @@ class Grades:
                 self.store.audit(db,"old-result-ignored",assignment["id"],{"version":assignment["version"]},now)
                 return None
             self.assignments._binding(current)
-            expected={"schemaVersion":1,"source":"per-question-results-v1","assignmentId":current["id"],"version":current["version"],"userUid":current["uid"],"instance":current["instance"],"deliveryHash":current["delivery"],"workId":current["work"]}
+            expected={"schemaVersion":2,"source":"per-slot-results-v2","assignmentId":current["id"],"version":current["version"],"userUid":current["uid"],"instance":current["instance"],"deliveryHash":current["delivery"],"workId":current["work"]}
             if any(evidence[k]!=v or type(evidence[k]) is not type(v) for k,v in expected.items()): raise GatewayError("Result identity/version binding rejected",503)
-            policy=self.assignments.works[current["work"]]["completion"]
-            computed=self._questions(policy,evidence["questions"])
+            work=self.assignments.works[current["work"]]
+            computed=self._slots(work,evidence["slots"],not_started=self._state(evidence))
             closed(evidence["completion"],computed)
             if any(evidence["completion"][k]!=v or type(evidence["completion"][k]) is not type(v) for k,v in computed.items()): raise GatewayError("Untrusted aggregate completion mismatch",503)
             attempt=evidence["currentAttempt"]
@@ -75,16 +87,16 @@ class Grades:
             latest=db.execute("SELECT event_id,attempt_number,data FROM observations WHERE assignment_id=? AND version=? ORDER BY attempt_number DESC,rowid DESC LIMIT 1",(current["id"],current["version"])).fetchone()
             if latest and attempt["number"]<latest["attempt_number"]:
                 self.store.audit(db,"old-attempt-ignored",current["id"],attempt,now);return None
-            if latest and attempt["number"]==latest["attempt_number"] and json.loads(latest["data"])["currentAttempt"]["id"]!=attempt["id"]: raise GatewayError("Conflicting current attempt",503)
-            if not any(q["status"]=="complete" and q["score"] is not None for q in evidence["questions"]): return None
-            stable={**evidence,"questions":sorted(evidence["questions"],key=lambda q:q["qualifiedId"])}
+            self._same_selection(latest,evidence)
+            if not any(q["status"]=="complete" and q["score"] is not None for q in evidence["slots"]): return None
+            stable={**evidence,"slots":sorted(evidence["slots"],key=lambda q:q["slotId"])}
             return self._record(db,stable,latest,current["id"],current["version"],current,computed["completedRequired"],computed["requiredCount"],now)
 
     def _lab_id(self,user_id,activity):
         return "lab-"+digest([user_id,activity,self.assignments.delivery["deliveryHash"]])
 
     def observe_lab(self,binding,evidence):
-        fields={"schemaVersion","source","userUid","instance","deliveryHash","workId","currentAttempt","questions","completion","scoreGiven","scoreMaximum"}
+        fields={"schemaVersion","source","userUid","instance","deliveryHash","workId","currentAttempt","slots","completion","state","scoreGiven","scoreMaximum"}
         closed(evidence,fields)
         activity=self.activities.get(binding["activity"])
         if not activity or activity["kind"]!="lab": raise GatewayError("Registered lab activity required",503)
@@ -94,9 +106,9 @@ class Grades:
         with self.store.transaction() as db:
             current=db.execute("SELECT b.*,u.uid,u.subject FROM activity_bindings b JOIN users u ON u.id=b.user_id WHERE b.user_id=? AND b.activity=?",(binding["user_id"],binding["activity"])).fetchone()
             if not current or current["resource"]!=activity["resourceLinkId"] or current["lineitem"]!=activity["lineitem"] or current["context"]!=self.assignments.flow.get("contextId",current["context"]) or any(current[k]!=binding[k] for k in ("context","resource","lineitem")): raise GatewayError("Lab activity/context binding rejected",503)
-            expected={"schemaVersion":1,"source":"per-question-results-v1","userUid":current["uid"],"instance":self.assignments.instance,"deliveryHash":self.assignments.delivery["deliveryHash"],"workId":work["id"]}
+            expected={"schemaVersion":2,"source":"per-slot-results-v2","userUid":current["uid"],"instance":self.assignments.instance,"deliveryHash":self.assignments.delivery["deliveryHash"],"workId":work["id"]}
             if any(evidence[k]!=v or type(evidence[k]) is not type(v) for k,v in expected.items()): raise GatewayError("Native lab identity/version mismatch",503)
-            completion=self._questions(work["completion"],evidence["questions"])
+            completion=self._slots(work,evidence["slots"],not_started=self._state(evidence))
             closed(evidence["completion"],completion)
             if any(evidence["completion"][k]!=v or type(evidence["completion"][k]) is not type(v) for k,v in completion.items()): raise GatewayError("Native lab completion mismatch",503)
             attempt=evidence["currentAttempt"]
@@ -106,12 +118,12 @@ class Grades:
             given,maximum=evidence["scoreGiven"],evidence["scoreMaximum"]
             if given is None or maximum is None: return None
             if not number(given) or not number(maximum) or not 0<=given<=maximum or maximum<=0: raise GatewayError("Invalid declared native lab score",503)
-            if not any(q["status"]=="complete" and q["score"] is not None for q in evidence["questions"]): return None
+            if not any(q["status"]=="complete" and q["score"] is not None for q in evidence["slots"]): return None
             identifier=self._lab_id(current["user_id"],current["activity"])
             latest=db.execute("SELECT event_id,attempt_number,data FROM observations WHERE assignment_id=? ORDER BY attempt_number DESC,rowid DESC LIMIT 1",(identifier,)).fetchone()
             if latest and attempt["number"]<latest["attempt_number"]: return None
-            if latest and attempt["number"]==latest["attempt_number"] and json.loads(latest["data"])["currentAttempt"]["id"]!=attempt["id"]: raise GatewayError("Conflicting native lab attempt",503)
-            stable={**evidence,"questions":sorted(evidence["questions"],key=lambda q:q["qualifiedId"])}
+            self._same_selection(latest,evidence)
+            stable={**evidence,"slots":sorted(evidence["slots"],key=lambda q:q["slotId"])}
             return self._record(db,stable,latest,identifier,1,current,given,maximum,now)
 
     def _current_lab(self,row,db):

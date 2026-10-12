@@ -7,8 +7,6 @@ from pathlib import Path
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"src"))
 import uvicorn
-from gateway.app import create_app
-from gateway.config import Configuration
 from gateway.courses import CoursesConfiguration, create_courses_app
 
 def main():
@@ -19,12 +17,11 @@ def main():
     args=p.parse_args()
     os.umask(0o077)
     value=json.loads(args.config.read_text())
-    multi=value.get("schemaVersion")==2
-    config=(CoursesConfiguration if multi else Configuration).model_validate(value)
+    config=CoursesConfiguration.model_validate(value)
     repo=Path(__file__).resolve().parents[1]
-    for course in (config.courses.values() if multi else [config]):
+    for course in config.courses.values():
         for path in (course.database,course.privateKeyFile,course.handoffTokenFile,course.bridge.tokenFile):
             if Path(path).resolve().is_relative_to(repo): p.error("Private runtime DB/keys/tokens must remain outside owner source")
-    uvicorn.run((create_courses_app if multi else create_app)(config),host=args.host,port=args.port,proxy_headers=False,access_log=False,server_header=False)
+    uvicorn.run(create_courses_app(config),host=args.host,port=args.port,proxy_headers=False,access_log=False,server_header=False)
 
 if __name__=="__main__":main()

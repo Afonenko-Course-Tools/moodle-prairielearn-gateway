@@ -2,7 +2,7 @@ import pytest
 from gateway.config import Configuration
 
 def example():
-    return {"schemaVersion":1,"publicOrigin":"https://course.example","database":"/private/runtime.sqlite","privateKeyFile":"/private/tool-key.json","handoffTokenFile":"/private/handoff-token","bridge":{"url":"http://private-pl:3001","tokenFile":"/private/bridge-token"},"deliveryPath":"/private/delivery","instance":"pilot","registration":{"issuer":"https://moodle.example","clientId":"client","deploymentId":"deploy","contextId":"context","authUrl":"https://moodle.example/auth","jwksUrl":"https://moodle.example/certs","tokenUrl":"https://moodle.example/token","activities":{"defense":{"kind":"defense","resourceLinkId":"resource","lineitem":"https://moodle.example/lineitems/defense"}}},"flow":{"mode":"immediate","capacity":{}}}
+    return {"routePrefix":"/gateway/courses/demo","publicOrigin":"https://course.example","database":"/private/runtime.sqlite","privateKeyFile":"/private/tool-key.json","handoffTokenFile":"/private/handoff-token","bridge":{"url":"http://private-pl:3001","tokenFile":"/private/bridge-token"},"deliveryPath":"/private/delivery","instance":"pilot","registration":{"issuer":"https://moodle.example","clientId":"client","deploymentId":"deploy","contextId":"context","authUrl":"https://moodle.example/auth","jwksUrl":"https://moodle.example/certs","tokenUrl":"https://moodle.example/token","activities":{"defense":{"kind":"defense","resourceLinkId":"resource","lineitem":"https://moodle.example/lineitems/defense"}}},"flow":{"mode":"immediate","capacity":{}}}
 
 def test_closed_config_default_capacity_unlimited():
     config=Configuration.model_validate(example())

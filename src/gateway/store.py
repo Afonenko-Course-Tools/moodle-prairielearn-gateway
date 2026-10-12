@@ -7,7 +7,8 @@ import sqlite3
 import time
 import math
 from decimal import Decimal
-from .errors import LaunchError
+from .errors import LaunchError, GatewayError
+import fcntl
 
 def digest(value):
     if not isinstance(value, str):
@@ -62,19 +63,24 @@ class Store:
         self.path = Path(path)
         self.gateway_prefix = '/gateway'
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as db:
-            self._enable_wal(db)
-            migration = Path(__file__).resolve().parents[2] / "migrations/001_runtime.sql"
-            # Wheel installs package data; source checkouts use owner migrations.
-            if not migration.exists(): migration = Path(__import__("sys").prefix) / "share/moodle-prairielearn-gateway/migrations/001_runtime.sql"
-            db.executescript(migration.read_text())
-            db.execute("BEGIN IMMEDIATE")
-            if not db.execute("SELECT 1 FROM schema_versions WHERE version=2").fetchone():
-                # executescript commits implicitly; individual statements keep the
-                # migration version check and ALTERs under one write lock.
-                for statement in (migration.parent / "002_delivery_leases.sql").read_text().split(";"):
-                    if statement.strip(): db.execute(statement)
-            db.commit()
+        # Serialize first creation across processes. Existing databases are opened
+        # read-only and validated before a writable SQLite connection or WAL.
+        with self.path.with_suffix(self.path.suffix+'.startup-lock').open('a') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX)
+            existing=self.path.exists()
+            if existing:
+                try:
+                    with sqlite3.connect(self.path.as_uri()+'?mode=ro',uri=True) as check:
+                        versions=[row[0] for row in check.execute('SELECT version FROM schema_versions')]
+                        if versions!=[3]:raise GatewayError('Unsupported Gateway database schema; create a fresh v3 database')
+                except sqlite3.DatabaseError as error:raise GatewayError('Unsupported Gateway database schema') from error
+            with self.connect() as db:
+                self._enable_wal(db)
+                if not existing:
+                    schema=Path(__file__).resolve().parents[2]/'schema/runtime.sql'
+                    if not schema.exists():schema=Path(__import__('sys').prefix)/'share/moodle-prairielearn-gateway/schema/runtime.sql'
+                    db.executescript(schema.read_text())
+
         self.path.chmod(0o600)
 
     def connect(self):

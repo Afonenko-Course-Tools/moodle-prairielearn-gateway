@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "moodle-prairielearn-gateway"
-version = "1.0.0"
+version = "2.0.0"
 description = "Verified Moodle LTI launches, persistent native assignments and scoped AGS results"
 requires-python = ">=3.14,<3.15"
 dependencies = ["fastapi==0.143.0", "httpx==0.28.1", "joserfc==1.7.5", "python-multipart==0.0.32", "uvicorn==0.54.0", "pydantic==2.14.0"]
@@ -13,7 +13,7 @@ dependencies = ["fastapi==0.143.0", "httpx==0.28.1", "joserfc==1.7.5", "python-m
 where = ["src"]
 
 [tool.setuptools.data-files]
-"share/moodle-prairielearn-gateway/migrations" = ["migrations/001_runtime.sql", "migrations/002_delivery_leases.sql"]
+"share/moodle-prairielearn-gateway/schema" = ["schema/runtime.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

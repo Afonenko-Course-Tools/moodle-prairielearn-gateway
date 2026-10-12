@@ -2,7 +2,7 @@
 
 Private FastAPI service for verified Moodle LTI 1.3 launches, native Community
 PrairieLearn assignments and Moodle AGS results. It uses joserfc (Authlib JOSE),
-SQLite migrations and the authenticated Platform bridge. Teacher operations never
+актуальной SQLite схемы and the authenticated Platform bridge. Teacher operations never
 grant PrairieLearn administrator access.
 
 Install the exact closure in a private Python 3.14 environment, then run the owner
@@ -15,7 +15,7 @@ python3.14 -m venv /private/gateway-venv
 /private/gateway-venv/bin/python -m pytest tests -q
 ```
 
-Copy `config/runtime.example.json` into a private runtime directory and replace
+Copy `config/courses.example.json` into a private runtime directory and replace
 the fixed registration, activity and native-delivery bindings. Unknown fields are
 rejected. The instance comes from the installed exporter delivery; each lab has
 its own registered Moodle resource/lineitem/work. Exactly one defense activity
@@ -54,24 +54,15 @@ the persistent assignments, audit and outbox.
 
 Для локального прототипа: [отдельное доверие TLS в Moodle/PHP, Gateway и браузере](docs/local-tls.md), генерация полного публичного CA bundle и Compose override без изменения томов данных.
 
-## Versioned release
+## Текущая версия и выпуск
 
-Version 1.0.0 packages runtime schema 1/2 and preserves unchanged-delivery state.
-Changed deliveries fail closed; explicit delivery migration is deferred. Install
-the wheel attached to the versioned GitHub release in a Python 3.14 environment,
-or install the complete owner source from the same tag and locked dependencies.
-
-The `Publish Gateway release image` workflow accepts an existing reviewed tag,
-checks its packaged version and integration into `main`, runs owner tests and
-publishes the Linux amd64 image. It attaches `release-images.json` with the
-actual registry digest, source commit and wheel hash to that release. A release
-is ready for deployment after those assets exist and the exact digest passes
-local integration. A local Docker image ID is not a registry digest.
-
-Use `ghcr.io/afonenko-course-tools/moodle-prairielearn-gateway@sha256:…` from
-that receipt when deploying; replace the example with the full recorded digest.
-Students need only browser access. Developers on another CachyOS laptop use their
-own local CA and the portable paths described in [local TLS](docs/local-tls.md).
+Кандидат 2.0.0 принимает только delivery/results/config v2 и новую БД3 без
+миграций. `config/courses.example.json` показывает именованные курсы. Каждый курс
+имеет собственные delivery и SQLite; вложенные конфиги не содержат schemaVersion.
+Publisher проверяет отсутствие registry tag до push, сохраняет receipt v2 с
+актуальными версиями схем и подтверждает pull фактического digest. Версия готова
+к использованию после публикации образа и полной интеграционной приёмки; локальный
+образ и candidate commit сами по себе не подтверждают выпуск.
 
 ## Несколько курсов и серверный пилот
 

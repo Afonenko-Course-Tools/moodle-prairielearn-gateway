@@ -71,9 +71,9 @@ load().catch(e=>status.textContent=e.message);
 
 def create_app(config, *, store=None, delivery=None, clients=None, clock=time.time, start_worker=True):
     if not isinstance(config,Configuration): config=Configuration.model_validate(config)
+    delivery=delivery or load_delivery(config.deliveryPath,config.instance)
     store=store or Store(config.database)
     store.gateway_prefix=config.routePrefix
-    delivery=delivery or load_delivery(config.deliveryPath,config.instance)
     own_clients=clients is None
     clients=clients or Clients(config)
     registration=config.registration.model_dump()
