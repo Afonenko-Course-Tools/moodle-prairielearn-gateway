@@ -30,7 +30,7 @@ async def test_installed_native_60_defenses_capacity_two_students_and_two_of_thr
     for who,row in ((a,ra),(b,rb)):
         policy=service.works[row["work"]]["completion"]
         assert len(policy["requiredSlotIds"])==3 and policy["atLeast"]==2
-        evidence={"schemaVersion":2,"source":"per-slot-results-v2","state":"started","assignmentId":row["id"],"version":row["version"],"userUid":who["uid"],"instance":"pilot","deliveryHash":delivery["deliveryHash"],"workId":row["work"],"currentAttempt":{"id":"synthetic-"+who["subject"],"number":1},"slots":[{"slotId":q,"qualifiedId":next(s["candidates"][0] for s in assignments.works[row["work"]]["slots"] if s["id"]==q),"score":s,"points":s*3,"maxPoints":3,"status":"complete"} for q,s in zip(policy["slotIds"],(1,1,.8),strict=True)],"completion":{"completedRequired":2,"requiredCount":3,"atLeast":2,"passed":True}}
+        evidence={"schemaVersion":2,"source":"per-slot-results-v2","state":"started","assignmentId":row["id"],"version":row["version"],"userUid":who["uid"],"instance":"pilot","deliveryHash":delivery["deliveryHash"],"workId":row["work"],"currentAttempt":{"id":"synthetic-"+who["subject"],"number":1},"slots":[{"slotId":q,"qualifiedId":next(s["candidates"][0] for s in service.works[row["work"]]["slots"] if s["id"]==q),"score":s,"points":s*3,"maxPoints":3,"status":"complete"} for q,s in zip(policy["slotIds"],(1,1,.8),strict=True)],"completion":{"completedRequired":2,"requiredCount":3,"atLeast":2,"passed":True}}
         assert grades.observe(row,evidence)["scoreGiven"]==2
     await grades.drain()
     assert len(ags.sent)==2 and {r[1]["userId"] for r in ags.sent}=={"student-a","student-b"}

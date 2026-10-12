@@ -33,7 +33,7 @@ def main():
         assert len(manifest["questions"])==3 and len(manifest["works"])==61
         defenses=[w for w in manifest["works"] if "relatedExercise" in w]
         assert len(defenses)==60 and len({w["relatedExercise"] for w in defenses})==60
-        assert all(w["completion"]["atLeast"]==2 and len(w["completion"]["requiredQuestionIds"])==3 for w in defenses)
+        assert all(w["completion"]["atLeast"]==2 and len(w["completion"]["requiredSlotIds"])==3 for w in defenses)
         lab=next(w for w in manifest["works"] if w["id"]=="sec-gateway-lab")
         assert not lab["policy"].get("assignment",{}).get("student-label"),"Ordinary lab must not require a defense label"
         print(json.dumps({"source":"installed-native-owner-export","synthetic":True,"questions":3,"defenses":60,"labs":1,"deliveryHash":manifest["deliveryHash"],"sourceRoot":str(source)},sort_keys=True))
