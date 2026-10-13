@@ -12,13 +12,15 @@ def env(tmp_path):
     store = Store(tmp_path / "runtime.sqlite")
     return store, LaunchService(store, registration, clock=lambda: 1000), key
 
-def attempt(env, mutate=None, state=None, binding="browser"):
+def attempt(env, mutate=None, state=None, binding="browser", mutate_key=None):
     store, service, key = env
     pending = state or service.begin("https://moodle.example", "client", "https://course.example/gateway/lti/launch", "hint", "message", binding)
     claims = {"iss": "https://moodle.example", "aud": "client", "sub": "student-a", "iat": 990, "exp": 1100, "nonce": pending["nonce"], LTI+"deployment_id": "deploy", LTI+"context": {"id": "context"}, LTI+"resource_link": {"id": "resource"}, LTI+"roles": [LEARNER], LTI+"message_type": "LtiResourceLinkRequest", LTI+"version": "1.3.0", LTI+"target_link_uri": "https://course.example/gateway/lti/launch", "https://purl.imsglobal.org/spec/lti-ags/claim/endpoint": {"lineitem": "https://moodle.example/lineitems/defense", "scope": ["https://purl.imsglobal.org/spec/lti-ags/scope/score"]}}
     if mutate: mutate(claims)
     token = jwt.encode({"alg": "RS256", "kid": "moodle-test"}, claims, key, algorithms=["RS256"])
-    return service.verify(pending["state"], binding, token, {"keys": [key.as_dict(private=False)]}), pending, token
+    public_key = key.as_dict(private=False)
+    if mutate_key: mutate_key(public_key)
+    return service.verify(pending["state"], binding, token, {"keys": [public_key]}), pending, token
 
 def test_launch_replay_rejected(env):
     session, pending, token = attempt(env)
@@ -82,3 +84,33 @@ def test_identity_tuple_and_missing_enrollment(env):
 def test_handoff_rejects_unscoped_or_control_targets(env,target):
     session,_,_=attempt(env)
     with pytest.raises(LaunchError):env[0].handoff(session["token"],target,1000)
+
+@pytest.mark.parametrize("client", ["", "unknown"])
+def test_explicit_unregistered_login_client_rejected(env, client):
+    with pytest.raises(LaunchError):
+        env[1].begin("https://moodle.example", client, "https://course.example/gateway/lti/launch", "hint", "message", "browser")
+
+@pytest.mark.parametrize("issuer,target", [
+    ("https://other.example", "https://course.example/gateway/lti/launch"),
+    ("https://moodle.example", "https://other.example/lti/launch"),
+])
+def test_login_without_client_still_requires_registered_issuer_and_target(env, issuer, target):
+    with pytest.raises(LaunchError):
+        env[1].begin(issuer, None, target, "hint", "message", "browser")
+
+
+def test_signed_launch_with_padded_rsa_modulus(env):
+    session, _, _ = attempt(env, mutate_key=lambda k: k.update(n=k["n"]+"=="))
+    assert env[0].session(session["token"], now=1000)["subject"] == "student-a"
+
+
+@pytest.mark.parametrize("suffix", ["=", "===", "==\n"])
+def test_malformed_rsa_padding_rejected(env, suffix):
+    with pytest.raises(LaunchError):
+        attempt(env, mutate_key=lambda k: k.update(n=k["n"]+suffix))
+
+
+def test_padded_rsa_key_does_not_bypass_signature(env):
+    foreign = RSAKey.generate_key(parameters={"kid": "moodle-test"})
+    with pytest.raises(LaunchError):
+        attempt(env, mutate_key=lambda k: k.update(n=foreign.as_dict(private=False)["n"]+"=="))

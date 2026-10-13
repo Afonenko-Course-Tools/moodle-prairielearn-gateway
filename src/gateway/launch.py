@@ -15,13 +15,30 @@ class LaunchClaimsRegistry(jwt.JWTClaimsRegistry):
         if type(value) is not int or value>self.now+5: raise LaunchError('Issuer clock skew rejected')
         self.check_value('iat',value)
 
+def platform_key_set(jwks):
+    keys = []
+    for original in jwks["keys"]:
+        key = dict(original)
+        if key.get("kty") == "RSA":
+            for name in ("n", "e"):
+                value = key[name]
+                if isinstance(value, str) and value.endswith("="):
+                    encoded = value.rstrip("=")
+                    padding = -len(encoded) % 4
+                    if padding not in (1, 2) or value != encoded + "=" * padding:
+                        raise LaunchError("Invalid Moodle RSA encoding")
+                    key[name] = encoded
+        keys.append(key)
+    return KeySet.import_key_set({"keys": keys})
+
+
 class LaunchService:
     def __init__(self, store, registration, clock=time.time):
         self.store, self.registration, self.clock = store, registration, clock
 
     def begin(self, issuer, client, target, hint, message, binding):
         r = self.registration
-        if issuer != r["issuer"] or client != r["clientId"] or target != r["targetLinkUri"] or not hint or not message or not binding:
+        if issuer != r["issuer"] or (client is not None and client != r["clientId"]) or target != r["targetLinkUri"] or not hint or not message or not binding:
             raise LaunchError("Login registration/binding rejected")
         return self.store.state(binding, int(self.clock()))
 
@@ -29,7 +46,7 @@ class LaunchService:
         now, r = int(self.clock()), self.registration
         pending = self.store.pending(state, binding, now)
         try:
-            token = jwt.decode(encoded, KeySet.import_key_set(jwks), algorithms=["RS256"])
+            token = jwt.decode(encoded, platform_key_set(jwks), algorithms=["RS256"])
             header, c = token.header, token.claims
             if header.get("alg") != "RS256" or not header.get("kid") or sum(k.get("kid")==header["kid"] for k in jwks["keys"]) != 1 or any(k in header for k in ("jku","jwk","x5u","x5c")):
                 raise LaunchError()
