@@ -73,12 +73,17 @@ async def test_safe_work_ui_no_unready_defense(setup):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("client_id", ["client", None])
-async def test_real_signed_http_launch_cookie_binding_bootstrap_and_replay(tmp_path, client_id):
+@pytest.mark.parametrize("padded_platform_key", [False, True])
+async def test_real_signed_http_launch_cookie_binding_bootstrap_and_replay(tmp_path, client_id, padded_platform_key):
     config=example();config["database"]=str(tmp_path/"http.sqlite")
     key=RSAKey.generate_key(parameters={"kid":"synthetic-moodle"})
     class Clients:
         bridge=Bridge()
-        async def jwks(self):return {"keys":[key.as_dict(private=False)]}
+        async def jwks(self):
+            public=key.as_dict(private=False)
+            if padded_platform_key:
+                public["n"] += "=="
+            return {"keys":[public]}
         class AGS:
             async def score(self,*args):pass
         ags=AGS()
