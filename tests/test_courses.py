@@ -7,7 +7,7 @@ from test_assignment import Bridge, delivery, person
 from gateway.store import Store
 from joserfc import jwt
 from joserfc.jwk import RSAKey
-from gateway.launch import LTI, INSTRUCTOR, SCORE_SCOPE
+from gateway.launch import LTI, INSTRUCTOR, LEARNER, SCORE_SCOPE
 
 def configs(tmp_path):
     courses={}
@@ -60,10 +60,20 @@ async def test_two_courses_reject_foreign_sessions_and_restart_without_losing_ot
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("client_id", ["client", None])
-async def test_one_lti_registration_routes_two_signed_resources_in_shared_context(tmp_path, client_id):
-    cfg=CoursesConfiguration.model_validate(configs(tmp_path));key=RSAKey.generate_key(parameters={'kid':'shared-moodle'})
+@pytest.mark.parametrize("role", ["student", "teacher", "administrator"])
+async def test_one_lti_registration_routes_two_signed_resources_in_shared_context(tmp_path, client_id, role):
+    values=configs(tmp_path)
+    for course in values['courses'].values(): course['administratorSubject']='owner'
+    cfg=CoursesConfiguration.model_validate(values);key=RSAKey.generate_key(parameters={'kid':'shared-moodle'})
     class Clients:
-        bridge=Bridge()
+        class NativeBridge(Bridge):
+            async def enroll(self, uid, instance, delivery_hash): pass
+            async def work_launch(self, uid, instance, delivery_hash, work_id):
+                assert work_id=='lab'
+                return '/pl/course_instance/1/assessment/2/'
+            async def administrator(self, uid):
+                return {'path':'/pl/administrator/courses'}
+        bridge=NativeBridge()
         async def jwks(self): return {'keys':[key.as_dict(private=False)]}
         class AGS:
             async def score(self,*args):pass
@@ -82,10 +92,27 @@ async def test_one_lti_registration_routes_two_signed_resources_in_shared_contex
             assert 'Path='+course.routePrefix in response.headers['set-cookie']
             oidc=httpx.URL(response.headers['location']).params
             assert oidc['client_id']=='client'
-            claims={'iss':'https://moodle.example','aud':'client','sub':'same-person','iat':990,'exp':1100,'nonce':oidc['nonce'],LTI+'deployment_id':'deploy',LTI+'context':{'id':'context'},LTI+'resource_link':{'id':name},LTI+'roles':[INSTRUCTOR],LTI+'message_type':'LtiResourceLinkRequest',LTI+'version':'1.3.0',LTI+'target_link_uri':target,'https://purl.imsglobal.org/spec/lti-ags/claim/endpoint':{'lineitem':'https://moodle.example/lineitems/'+name,'scope':[SCORE_SCOPE]}}
+            claims={'iss':'https://moodle.example','aud':'client','sub':'owner' if role=='administrator' else 'same-person','iat':990,'exp':1100,'nonce':oidc['nonce'],LTI+'deployment_id':'deploy',LTI+'context':{'id':'context'},LTI+'resource_link':{'id':name},LTI+'roles':[LEARNER if role=='student' else INSTRUCTOR],LTI+'message_type':'LtiResourceLinkRequest',LTI+'version':'1.3.0',LTI+'target_link_uri':target,'https://purl.imsglobal.org/spec/lti-ags/claim/endpoint':{'lineitem':'https://moodle.example/lineitems/'+name,'scope':[SCORE_SCOPE]}}
             token=jwt.encode({'alg':'RS256','kid':key.kid},claims,key,algorithms=['RS256'])
             launch=await c.post(course.routePrefix+'/lti/launch',data={'state':oidc['state'],'id_token':token})
-            assert launch.status_code==303 and launch.headers['location']==course.routePrefix+'/'
+            assert launch.status_code==303
+            assert launch.headers['location'].startswith(course.routePrefix+'/pl/')
+            child=app.state.courses[name]
+            child.state.handoff_secret='s'*32
+            opaque=launch.headers['location'].rsplit('/',1)[-1]
+            internal='/internal/handoff/courses/'+name+'/'+opaque
+            headers={'Authorization':'Bearer '+'s'*32}
+            handoff=await c.get(internal,headers=headers)
+            assert handoff.status_code==200
+            target=course.routePrefix+('/administrator-bootstrap' if role=='administrator' else '/bootstrap')+'/'+opaque
+            assert handoff.json()['target']==target
+            assert (await c.get(internal,headers=headers)).status_code==403
+            bootstrap=await c.get(target)
+            assert bootstrap.status_code==303
+            expected={'student':'/pl/course_instance/1/assessment/2/', 'teacher':'/pl/', 'administrator':'/pl/administrator/courses'}
+            assert bootstrap.headers['location']==expected[role]
+            assert (await c.get(target)).status_code==403
+            assert ('pl2_access_as_administrator=active' in bootstrap.headers.get('set-cookie','')) == (role=='administrator')
         uids=[]
         for child in app.state.courses.values():
             with child.state.store.connect() as db:uids.append(db.execute('SELECT uid FROM users').fetchone()[0])
