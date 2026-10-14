@@ -142,6 +142,25 @@ class Store:
             db.execute("INSERT INTO handoffs(token_hash,session_hash,target,expires) VALUES(?,?,?,?)", (digest(token), digest(session), target, now+60))
         return token
 
+    def bootstrap_handoff(self, session, administrator, now):
+        who=self.session(session,now)
+        if administrator and who["role"]!="teacher": raise LaunchError("Teacher role required")
+        token=secrets.token_urlsafe(32)
+        target=self.gateway_prefix+("/administrator-bootstrap/" if administrator else "/bootstrap/")+token
+        with self.transaction() as db:
+            db.execute("INSERT INTO handoffs(token_hash,session_hash,target,expires) VALUES(?,?,?,?)",(digest(token),digest(session),target,now+60))
+        return token,target
+
+    def consume_bootstrap(self, token, session, administrator, now):
+        current=self.session(session,now)
+        target=self.gateway_prefix+("/administrator-bootstrap/" if administrator else "/bootstrap/")+token
+        with self.transaction() as db:
+            row=db.execute("SELECT h.target,h.expires AS handoff_expires,h.consumed,s.*,u.uid,u.subject,u.name,u.issuer,u.client,u.deployment,u.id AS userId FROM handoffs h JOIN sessions s ON s.token_hash=h.session_hash JOIN users u ON u.id=s.user_id WHERE h.token_hash=?",(digest(token),)).fetchone()
+            if not row or row["consumed"]!=1 or row["target"]!=target or row["handoff_expires"]<=now or row["expires"]<=now or row["userId"]!=current["userId"] or row["role"]!=current["role"]:
+                raise LaunchError("Bootstrap binding/TTL/replay rejected")
+            db.execute("UPDATE handoffs SET consumed=2 WHERE token_hash=?",(digest(token),))
+            return dict(row)
+
     def consume_handoff(self, token, now):
         with self.transaction() as db:
             row = db.execute("SELECT h.*,u.uid,u.name,s.role,s.expires AS session_expires FROM handoffs h JOIN sessions s ON s.token_hash=h.session_hash JOIN users u ON u.id=s.user_id WHERE h.token_hash=?", (digest(token),)).fetchone()

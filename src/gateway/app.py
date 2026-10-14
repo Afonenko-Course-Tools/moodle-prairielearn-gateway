@@ -145,10 +145,14 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
         params=dict(await request.form())
         if set(params)!={"state","id_token"}: raise LaunchError("Launch fields rejected")
         value=launch.verify(params["state"],request.cookies.get("GatewayBinding",""),params["id_token"],await clients.jwks())
-        if value["role"]=="student":
-            token=store.handoff(value["token"],config.routePrefix + "/bootstrap",int(clock()))
+        activity=config.registration.activities[value["activity"]]
+        if value["role"]=="student" or activity.kind=="lab":
+            target=config.routePrefix + ("/administrator-bootstrap" if administrator_allowed(value) else "/bootstrap")
+            if activity.kind=="lab":
+                token,target=store.bootstrap_handoff(value["token"],administrator_allowed(value),int(clock()))
+            else: token=store.handoff(value["token"],target,int(clock()))
             response=RedirectResponse(config.routePrefix + "/pl/"+token,status_code=303)
-            response.set_cookie("pl2_pre_auth_url",config.routePrefix + "/bootstrap",secure=True,httponly=True,samesite="lax",path="/")
+            response.set_cookie("pl2_pre_auth_url",target,secure=True,httponly=True,samesite="lax",path="/")
         else: response=RedirectResponse(config.routePrefix + "/",status_code=303)
         response.set_cookie("GatewaySession",value["token"],secure=True,httponly=True,samesite="lax",path=config.routePrefix,max_age=3600)
         response.delete_cookie("GatewayBinding",path=config.routePrefix,secure=True,httponly=True,samesite="none")
@@ -174,13 +178,21 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
         session(request)
         return HTMLResponse(PAGE.replace("/gateway",config.routePrefix))
 
+    @app.get(config.routePrefix + "/bootstrap/{token}")
     @app.get(config.routePrefix + "/bootstrap")
-    async def bootstrap(request:Request):
-        who=session(request)
-        if who["role"]!="student": raise LaunchError("Native Student enrollment required")
+    async def bootstrap(request:Request,token:str|None=None):
+        who=store.consume_bootstrap(token,request.cookies.get("GatewaySession",""),False,int(clock())) if token else session(request)
+        activity=config.registration.activities[who["activity"]]
+        if who["role"]!="student":
+            if activity.kind!="lab": raise LaunchError("Native Student enrollment required")
+            return RedirectResponse("/pl/",status_code=303)
         await clients.bridge.enroll(who["uid"],config.instance,delivery["deliveryHash"])
         await assignments.reconcile_all()
-        return RedirectResponse(config.routePrefix + "/",status_code=303)
+        target=config.routePrefix + "/"
+        if activity.kind=="lab":
+            assignments.launch_work(who,activity.workId)
+            target=await clients.bridge.work_launch(who["uid"],config.instance,delivery["deliveryHash"],activity.workId)
+        return RedirectResponse(target,status_code=303)
 
     def administrator_allowed(who):
         return bool(config.administratorSubject) and who["role"]=="teacher" and all(who[key]==value for key,value in (("issuer",registration["issuer"]),("client",registration["clientId"]),("deployment",registration["deploymentId"]),("subject",config.administratorSubject)))
@@ -196,9 +208,11 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
         token=store.handoff(request.cookies["GatewaySession"],config.routePrefix + "/administrator-bootstrap",int(clock()))
         return {"url":config.routePrefix + "/pl/"+token}
 
+    @app.get(config.routePrefix + "/administrator-bootstrap/{token}")
     @app.get(config.routePrefix + "/administrator-bootstrap")
-    async def administrator_bootstrap(request:Request):
-        who=administrator_session(request)
+    async def administrator_bootstrap(request:Request,token:str|None=None):
+        who=store.consume_bootstrap(token,request.cookies.get("GatewaySession",""),True,int(clock())) if token else administrator_session(request)
+        if not administrator_allowed(who): raise LaunchError("Explicit administrator identity required")
         answer=await clients.bridge.administrator(who["uid"])
         response=RedirectResponse(answer["path"],status_code=303)
         response.set_cookie("pl2_access_as_administrator","active",secure=True,httponly=True,samesite="lax",path="/")
