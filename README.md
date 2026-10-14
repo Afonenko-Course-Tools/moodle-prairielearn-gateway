@@ -52,6 +52,13 @@ assignment migration currently fails closed pending the reviewed explicit
 Platform/Gateway migration workflow; restarting an unchanged delivery preserves
 the persistent assignments, audit and outbox.
 
+Новый native course с отдельным instance можно подключить к существующему
+профилю, сохранив SQLite schema3, routePrefix, регистрацию и ключи. Неистёкшие
+session tokens и CSRF остаются действительными; старые назначения и attempts
+сохраняются в прежнем instance. Это не миграция delivery внутри того же
+instance. Свежая БД утратит распознавание старых cookies. Точная граница и
+проверки описаны в [инструкции обновления](docs/two-courses.md#оценки-и-обновления).
+
 Для локального прототипа: [отдельное доверие TLS в Moodle/PHP, Gateway и браузере](docs/local-tls.md), генерация полного публичного CA bundle и Compose override без изменения томов данных.
 
 ## Текущая версия и выпуск
