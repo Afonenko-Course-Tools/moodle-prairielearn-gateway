@@ -14,7 +14,9 @@ Cookie `GatewaySession` ограничен этим path; session, assignment, o
 и путём `/gateway/courses/<id>`. Вложенная запись не содержит `schemaVersion`.
 Путь `/gateway/lti/login` служит общим OIDC endpoint; отдельный однокурсовый
 профиль через `/gateway` не поддерживается. Прежняя Configuration v1
-отклоняется. Новая версия требует свежую БД schema3 без переноса старых назначений.
+отклоняется. Переход с несовместимой прежней схемы требует свежую БД schema3
+без переноса старых назначений. Штатный новый instance в существующей schema3
+описан ниже; он не требует замены БД.
 
 ## Регистрация Moodle
 
@@ -94,9 +96,33 @@ Worker каждого профиля читает фактические native 
 lineitem. Повторная отправка после сбоя не создаёт другую пользовательскую
 identity. Подготовка новой immutable delivery одного курса описана
 [в текущей инструкции Platform](https://github.com/Afonenko-Course-Tools/prairielearn-platform/blob/v2.0.0/docs/proxmox-pilot.md).
-Изменённая delivery требует отдельного нового состояния профиля и свежей SQLite
-БД schema3; прежние назначения и observations автоматически не переносятся.
-Старую БД и snapshots можно сохранить как архив, но они не становятся состоянием
-новой delivery после native sync. Другой профиль сохраняет свою delivery и БД.
+Замена delivery **в том же instance** несовместима с его существующими
+назначениями: Gateway требует explicit delivery migration и не переписывает
+их автоматически. Если вместо согласованной миграции выбирается изолированное
+новое состояние, нужна свежая SQLite schema3. Такая замена БД перестаёт
+распознавать прежние `GatewaySession`: сохранение signing key не сохраняет
+session bearer, и потребуется новый подписанный Moodle launch.
+
+Для нового semester можно подготовить **новый native course и отдельный
+instance**, например `2026-2027-s1`, затем переключить существующий профиль на
+его verified delivery и согласованную native bridge binding. Сохраняются
+существующая SQLite schema3, routePrefix, HTTPS origin, LTI registration и
+activity bindings, signing/handoff/bridge keys, tokens и TLS certificates.
+Неистёкшие `GatewaySession` и CSRF продолжают распознаваться в той же БД и
+cookie path; обычный TTL и одноразовость handoff/state остаются прежними.
+Bootstrap зачисляет в новый instance, а прежние native enrollment/attempts
+и назначения старого instance не изменяются. В частности, новое назначение
+того же студента создаётся отдельно, без копирования старой defense row.
+Это новый scope, а не перенос состояния между delivery внутри старого instance.
+
+Перед переключением проверьте exact delivery/native IDs и complete grading
+receipt, отсутствие незавершённого AGS send и сохранность старых строк.
+Один worker профиля остаётся единственным writer его Moodle lineitem;
+параллельный второй профиль с тем же LTI resource tuple запрещён. Старые
+observations/outbox не становятся оценками нового instance. Проверка
+`test_new_instance_preserves_session_csrf_and_old_assignment_only_with_same_database`
+покрывает локальные HTTP/session/assignment границы; настоящий Moodle launch,
+native submission и AGS readback проверяются отдельно. Другой профиль сохраняет
+свою delivery и БД.
 
 При совместной приёмке двух курсов проверьте подписанные launches для нескольких Student identities и преподавателя: общую учётную запись и отдельные зачисления, запрет Student admin и чужих attempts, реальные текстовые native submissions и независимые AGS результаты. Выполнение обязательных позиций проверяется отдельно от взвешенной native оценки. Эта проверка не подтверждает настройки Moodle учреждения.
