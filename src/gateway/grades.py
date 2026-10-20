@@ -61,7 +61,10 @@ class Grades:
 
     def _bind_attempt(self,db,identifier,version,evidence):
         attempt=evidence['currentAttempt']
-        selection=json.dumps(sorted((s['slotId'],s['qualifiedId']) for s in evidence['slots']))
+        # Choice binds its canonical assignment pool, not the changing best result.
+        work=self.assignments.works[evidence['workId']]
+        slots={slot['id']:slot for slot in work['slots']}
+        selection=json.dumps(sorted((s['slotId'],{'choice':sorted(slots[s['slotId']]['candidates'])} if slots[s['slotId']]['selection']=='choice' else s['qualifiedId']) for s in evidence['slots']),sort_keys=True)
         rows=db.execute('SELECT * FROM native_attempts WHERE scope=? AND version=? ORDER BY attempt_number DESC',(identifier,version)).fetchall()
         prior=next((row for row in rows if row['attempt_number']==attempt['number'] or row['attempt_id']==attempt['id']),None)
         if prior:
@@ -96,6 +99,7 @@ class Grades:
             latest=db.execute("SELECT event_id,attempt_number,data FROM observations WHERE assignment_id=? AND version=? ORDER BY attempt_number DESC,rowid DESC LIMIT 1",(current["id"],current["version"])).fetchone()
             if latest and attempt["number"]<latest["attempt_number"]:
                 self.store.audit(db,"old-attempt-ignored",current["id"],attempt,now);return None
+            if any(q["status"]=="grading" for q in evidence["slots"]): return None
             if not any(q["status"]=="complete" and q["score"] is not None for q in evidence["slots"]): return None
             stable={**evidence,"slots":sorted(evidence["slots"],key=lambda q:q["slotId"])}
             return self._record(db,stable,latest,current["id"],current["version"],current,computed["completedRequired"],computed["requiredCount"],now)
@@ -129,6 +133,7 @@ class Grades:
             if not self._bind_attempt(db,identifier,1,evidence):return None
             if given is None or maximum is None: return None
             if not number(given) or not number(maximum) or not 0<=given<=maximum or maximum<=0: raise GatewayError("Invalid declared native lab score",503)
+            if any(q["status"]=="grading" for q in evidence["slots"]): return None
             if not any(q["status"]=="complete" and q["score"] is not None for q in evidence["slots"]): return None
             latest=db.execute("SELECT event_id,attempt_number,data FROM observations WHERE assignment_id=? ORDER BY attempt_number DESC,rowid DESC LIMIT 1",(identifier,)).fetchone()
             if latest and attempt["number"]<latest["attempt_number"]: return None

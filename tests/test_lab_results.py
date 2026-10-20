@@ -16,7 +16,14 @@ async def test_labs_preserve_native_declared_weighted_score_and_activity(tmp_pat
     ags=AGS();grades=Grades(store,assignments,ags,clock=lambda:1000,activities=activities)
     binding={"user_id":student["userId"],"uid":student["uid"],"subject":"student-a","activity":"lab","context":"context","resource":"lab-resource","lineitem":"https://moodle.example/lab-lineitem"}
     evidence={"schemaVersion":2,"source":"per-slot-results-v2","state":"started","userUid":student["uid"],"instance":"pilot","deliveryHash":"a"*64,"workId":"lab","currentAttempt":{"id":"native-lab","number":1},"slots":[{"slotId":"demo/lab/exr-"+str(i+1),"qualifiedId":"demo/exr-"+str(i+1),"score":s,"points":s,"maxPoints":1,"status":"complete"} for i,s in enumerate((1,.5,1))],"completion":{"completedRequired":2,"requiredCount":3,"atLeast":2,"passed":True},"scoreGiven":6,"scoreMaximum":8}
+    import copy
+    pending=copy.deepcopy(evidence);pending['slots'][1]['status']='grading'
+    assert grades.observe_lab(binding,pending) is None
+    with store.connect() as db:assert db.execute('SELECT count(*) FROM outbox').fetchone()[0]==0
     assert grades.observe_lab(binding,evidence)["scoreGiven"]==6
+    with store.connect() as db:before=[tuple(r) for r in db.execute('SELECT * FROM outbox')]
+    assert grades.observe_lab(binding,pending) is None
+    with store.connect() as db:assert [tuple(r) for r in db.execute('SELECT * FROM outbox')]==before
     await grades.drain()
     assert ags.sent[0][0]=="https://moodle.example/lab-lineitem" and ags.sent[0][1]["scoreMaximum"]==8
     wrong={**evidence,"userUid":"foreign"}

@@ -76,3 +76,11 @@ Publisher проверяет отсутствие registry tag до push, сох
 Общая LTI-регистрация одного Moodle курса и независимые native-курсы описаны
 в [инструкции](docs/two-courses.md). Пример конфигурации —
 [config/courses.example.json](config/courses.example.json).
+
+## Локальный candidate delivery v3
+
+Новый reader принимает только delivery v3 с явными grading/submission bindings всего каталога вопросов. Results остаются `per-slot-results-v2`: один фактический представитель на слот. Для `choice` native bridge проверяет всех кандидатов и выбирает full → score → lexical ID; Gateway закрепляет весь canonical pool этой позиции внутри попытки. Поэтому смена лучшего A→B допустима, но fixed/random по-прежнему закрепляют выбранный вопрос. Чужой представитель и изменение canonical pool отвергаются.
+
+`grading` выбранного представителя блокирует новый FullyGraded event; прежний outbox/опубликованный результат сохраняется. Pending проигрывающей альтернативы не меняет завершённый status победителя. Завершённая partial оценка не равна accepted slot: completion требует score=1 с полными native points. Assignment и lab сохраняют свои прежние шкалы.
+
+Адресные interoperability tests используют `PLATFORM_BRIDGE_POLICY=/absolute/candidate/bridge/policy.mjs` и проверяют фактический Node producer перед Gateway. Без явного пути этот межрепозиторный тест отмечается skipped; обычные reader/attempt/outbox tests исполняются самостоятельно. Эти synthetic tests не подтверждают actual Moodle authentication или UI двух студентов.
