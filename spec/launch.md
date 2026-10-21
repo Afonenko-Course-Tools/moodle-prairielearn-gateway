@@ -39,9 +39,14 @@ unscoped `/pl/` targets fail.
 
 The public proxy owns `/gateway/pl/{token}`. It invokes private
 `GET /internal/handoff/{token}` with a separate service bearer. Successful JSON
-contains only uid/displayName/email/target. Headers X-Verified-Uid,
-X-Verified-Name and X-Verified-Target support auth_request; non-ASCII names use a
-fixed ASCII header fallback while JSON retains the verified name. No role is sent.
+contains only uid/displayName/email/target.
+Заголовки `X-Verified-Uid`, `X-Verified-Name-UTF8-B64` и `X-Verified-Target`
+поддерживают `auth_request`. Имя передаётся как `v1.` и canonical base64url
+без padding от строгого UTF-8; JSON сохраняет исходную Unicode-строку.
+Граница — 256 Unicode scalar values, 1024 UTF-8 bytes, 1369 ASCII wire chars.
+Старый raw Name header не выдаётся. Отсутствующий/недопустимый signed claim
+сохраняет прежнюю fallback policy; пустая допустимая строка кодируется `v1.`.
+Имя не входит в UID/digest и не определяет роль.
 The proxy strips all client identity headers/cookies on this path, forwards only
 the verified identity and server-derived pl2_pre_auth_url cookie, and invokes
 Community `/pl/shibcallback`. Native PrairieLearn creates its own ordinary session.

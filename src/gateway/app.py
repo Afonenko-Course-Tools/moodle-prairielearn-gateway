@@ -1,4 +1,5 @@
 import asyncio
+import base64
 from contextlib import asynccontextmanager
 import json
 from pathlib import Path
@@ -28,6 +29,15 @@ class TeacherSelection(Selection):
     userId: str = Field(min_length=1,max_length=128)
 
 class Empty(Closed): pass
+
+def verified_name_header(name):
+    """ASCII wire-format; signed claim policy and stable identity remain upstream."""
+    if not isinstance(name, str) or len(name) > 256 or any(ord(c) < 32 or 0xD800 <= ord(c) <= 0xDFFF for c in name):
+        raise LaunchError("Некорректное подтверждённое имя Gateway")
+    data = name.encode("utf-8", errors="strict")
+    if len(data) > 1024:
+        raise LaunchError("Некорректное подтверждённое имя Gateway")
+    return "v1." + base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
 
 def secret(path):
     value=Path(path).read_text().strip()
@@ -164,9 +174,8 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
         if not secrets.compare_digest(request.headers.get("authorization",""),expected): raise LaunchError("Private service authentication required")
         value=store.consume_handoff(token,int(clock()))
         if any(ord(c)<32 or ord(c)>126 for c in value["uid"]+value["target"]): raise LaunchError("Invalid handoff header")
-        name=value["displayName"]
-        if any(ord(c)<32 or ord(c)>126 for c in name): name="Moodle participant"
-        return JSONResponse(value,headers={"X-Verified-Uid":value["uid"],"X-Verified-Name":name,"X-Verified-Target":value["target"]})
+        name=verified_name_header(value["displayName"])
+        return JSONResponse(value,headers={"X-Verified-Uid":value["uid"],"X-Verified-Name-UTF8-B64":name,"X-Verified-Target":value["target"]})
 
     @app.get(config.routePrefix + "/.well-known/jwks.json")
     async def tool_keys():

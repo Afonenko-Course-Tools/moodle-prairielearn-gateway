@@ -112,6 +112,6 @@ async def test_real_signed_http_launch_cookie_binding_bootstrap_and_replay(tmp_p
         app.state.handoff_secret="s"*32
         handoff=launched.headers["location"].split("/")[-1]
         reply=await http.get("/internal/handoff/courses/demo/"+handoff,headers={"Authorization":"Bearer "+"s"*32})
-        assert reply.headers["x-verified-target"]=="/gateway/courses/demo/bootstrap" and reply.headers["x-verified-name"]=="Moodle participant"
+        assert reply.headers["x-verified-target"]=="/gateway/courses/demo/bootstrap" and reply.headers["x-verified-name-utf8-b64"]=="v1.0KHRgtGD0LTQtdC90YI"
         assert reply.json()["displayName"]=="Студент" and "role" not in reply.json()
         assert (await http.post("/gateway/courses/demo/lti/launch",data=body)).status_code==403
