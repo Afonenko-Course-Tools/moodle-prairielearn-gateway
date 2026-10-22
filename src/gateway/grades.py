@@ -76,7 +76,11 @@ class Grades:
             db.execute('INSERT INTO native_attempts VALUES(?,?,?,?,?,?,?,?)',(identifier,version,evidence['instance'],evidence['deliveryHash'],evidence['workId'],attempt['id'],attempt['number'],selection))
         return True
 
+    def _catalog_binding(self, row):
+        return any(a["kind"]=="catalog" and a["resourceLinkId"]==row["resource"] and a["lineitem"]==row["lineitem"] for a in self.activities.values())
+
     def observe(self, assignment, evidence):
+        if self._catalog_binding(assignment): return None
         closed(evidence,{"schemaVersion","source","assignmentId","version","userUid","instance","deliveryHash","workId","currentAttempt","slots","completion","state"})
         now=int(self.clock())
         with self.store.transaction() as db:
@@ -154,6 +158,7 @@ class Grades:
         for event_id in ids:
             with self.store.transaction() as db:
                 row=db.execute("SELECT * FROM outbox WHERE id=?",(event_id,)).fetchone()
+                if self._catalog_binding(row): continue
                 if row["state"] not in ("pending","sending") or row["state"]=="sending" and row["lease_until"]>now: continue
                 current=db.execute("SELECT * FROM assignments WHERE id=?",(row["assignment_id"],)).fetchone()
                 valid=bool(current and current["state"] in ACTIVE and current["instance"]==self.assignments.instance and current["delivery"]==self.assignments.delivery["deliveryHash"] and all(current[k]==row[k] for k in ("version","user_id","context","resource","delivery","lineitem"))) or self._current_lab(row,db)
@@ -187,6 +192,7 @@ class Grades:
     async def poll(self):
         with self.store.connect() as db: rows=[dict(r) for r in db.execute("SELECT * FROM assignments WHERE state IN ('assigned','approved','completed') AND instance=? AND delivery=?",(self.assignments.instance,self.assignments.delivery["deliveryHash"]))]
         for row in rows:
+            if self._catalog_binding(row): continue
             try: self.observe(row,await self.assignments.bridge.results(row["id"],row["version"]))
             except GatewayError:
                 with self.store.transaction() as db: self.store.audit(db,"result-read-failed",row["id"],{"version":row["version"]},int(self.clock()))

@@ -84,3 +84,36 @@ Publisher проверяет отсутствие registry tag до push, сох
 `grading` выбранного представителя блокирует новый FullyGraded event; прежний outbox/опубликованный результат сохраняется. Pending проигрывающей альтернативы не меняет завершённый status победителя. Завершённая partial оценка не равна accepted slot: completion требует score=1 с полными native points. Assignment и lab сохраняют свои прежние шкалы.
 
 Адресные interoperability tests используют `PLATFORM_BRIDGE_POLICY=/absolute/candidate/bridge/policy.mjs` и проверяют фактический Node producer перед Gateway. Без явного пути этот межрепозиторный тест отмечается skipped; обычные reader/attempt/outbox tests исполняются самостоятельно. Эти synthetic tests не подтверждают actual Moodle authentication или UI двух студентов.
+
+## Вход в каталог без передачи оценки
+
+`kind: catalog` открывает существующие «Мои работы» и выбранные обычные работы
+текущего delivery/instance. Он не создаёт назначение защиты и не отправляет AGS:
+ни текущие результаты каталога, ни прежний pending outbox этого activity.
+Существующие sent/pending строки сохраняются; это не перенос старой оценки.
+
+Пример внутренней привязки (адреса вымышлены):
+
+```json
+"streams": {
+  "kind": "catalog",
+  "resourceLinkId": "existing-resource",
+  "lineitem": "https://moodle.example/lineitems/existing",
+  "workId": null
+}
+```
+
+При смене маршрута прежние resourceLinkId/lineitem и внешняя регистрация остаются
+неизменными. `workId` у catalog запрещён. Студент проходит обычный одноразовый
+handoff, enroll тем же UID и выбирает текущую обычную работу. Преподаватель
+использует существующий преподавательский вход без доступа от имени студента.
+Защиты, выбор/выдача назначений и roster из catalog недоступны.
+
+Это описание source transport, а не разрешение менять production configuration
+или состояние SQLite. Cutover требует отдельной проверки неизвестных/in-flight
+scores, backup/restore и сохранения истории. Реальные проверки Moodle двумя
+студентами и преподавателем остаются отдельным этапом.
+
+Source candidate `2.1.0` добавляет закрытый маршрут catalog. Это подготовленный
+кандидат для отдельного review/CI; публикация версии или Docker image здесь
+не выполнялась.

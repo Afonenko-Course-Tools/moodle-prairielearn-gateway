@@ -16,7 +16,7 @@ def origin(value):
     return parsed.scheme,parsed.netloc
 
 class Activity(Closed):
-    kind: Literal["defense","lab"]
+    kind: Literal["defense","lab","catalog"]
     resourceLinkId: str = Field(min_length=1,max_length=256)
     lineitem: str
     workId: str | None = None
@@ -42,7 +42,7 @@ class Registration(Closed):
         if not self.activities or len({v.resourceLinkId for v in self.activities.values()})!=len(self.activities): raise ValueError("Unique activity bindings required")
         if sum(v.kind=="defense" for v in self.activities.values())>1: raise ValueError("At most one defense lineitem required")
         for activity in self.activities.values():
-            if origin(activity.lineitem)!=expected or activity.kind=="lab" and not activity.workId or activity.kind=="defense" and activity.workId: raise ValueError("Fixed AGS activity/work binding required")
+            if origin(activity.lineitem)!=expected or activity.kind=="lab" and not activity.workId or activity.kind=="defense" and activity.workId or activity.kind=="catalog" and activity.workId is not None: raise ValueError("Fixed AGS activity/work binding required")
         return self
 
 class Flow(Closed):
