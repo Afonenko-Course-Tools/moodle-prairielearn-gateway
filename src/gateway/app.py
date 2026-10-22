@@ -1,4 +1,5 @@
 import asyncio
+import base64
 from contextlib import asynccontextmanager
 import json
 from pathlib import Path
@@ -28,6 +29,15 @@ class TeacherSelection(Selection):
     userId: str = Field(min_length=1,max_length=128)
 
 class Empty(Closed): pass
+
+def verified_name_header(name):
+    """ASCII wire-format; signed claim policy and stable identity remain upstream."""
+    if not isinstance(name, str) or len(name) > 256 or any(ord(c) < 32 or 0xD800 <= ord(c) <= 0xDFFF for c in name):
+        raise LaunchError("Некорректное подтверждённое имя Gateway")
+    data = name.encode("utf-8", errors="strict")
+    if len(data) > 1024:
+        raise LaunchError("Некорректное подтверждённое имя Gateway")
+    return "v1." + base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
 
 def secret(path):
     value=Path(path).read_text().strip()
@@ -79,9 +89,8 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
     registration=config.registration.model_dump()
     registration["targetLinkUri"]=config.publicOrigin.rstrip("/")+config.routePrefix + "/lti/launch"
     launch=LaunchService(store,registration,clock)
-    defense_key=next((k for k,v in config.registration.activities.items() if v.kind=="defense"),next(iter(config.registration.activities)))
-    defense=config.registration.activities[defense_key]
-    flow={**config.flow.model_dump(),"contextId":registration["contextId"],"resourceLinkId":defense.resourceLinkId,"lineitem":defense.lineitem}
+    defense=next((v for v in config.registration.activities.values() if v.kind=="defense"),next((v for v in config.registration.activities.values() if v.kind!="catalog"),None))
+    flow={**config.flow.model_dump(),"contextId":registration["contextId"],"resourceLinkId":defense.resourceLinkId if defense else None,"lineitem":defense.lineitem if defense else None}
     assignments=Assignments(store,clients.bridge,delivery,config.instance,flow,clock)
     grades=Grades(store,assignments,clients.ags,clock,activities={k:v.model_dump() for k,v in config.registration.activities.items()})
 
@@ -146,9 +155,9 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
         if set(params)!={"state","id_token"}: raise LaunchError("Launch fields rejected")
         value=launch.verify(params["state"],request.cookies.get("GatewayBinding",""),params["id_token"],await clients.jwks())
         activity=config.registration.activities[value["activity"]]
-        if value["role"]=="student" or activity.kind=="lab":
+        if value["role"]=="student" or activity.kind in ("lab","catalog"):
             target=config.routePrefix + ("/administrator-bootstrap" if administrator_allowed(value) else "/bootstrap")
-            if activity.kind=="lab":
+            if activity.kind in ("lab","catalog"):
                 token,target=store.bootstrap_handoff(value["token"],administrator_allowed(value),int(clock()))
             else: token=store.handoff(value["token"],target,int(clock()))
             response=RedirectResponse(config.routePrefix + "/pl/"+token,status_code=303)
@@ -164,9 +173,8 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
         if not secrets.compare_digest(request.headers.get("authorization",""),expected): raise LaunchError("Private service authentication required")
         value=store.consume_handoff(token,int(clock()))
         if any(ord(c)<32 or ord(c)>126 for c in value["uid"]+value["target"]): raise LaunchError("Invalid handoff header")
-        name=value["displayName"]
-        if any(ord(c)<32 or ord(c)>126 for c in name): name="Moodle participant"
-        return JSONResponse(value,headers={"X-Verified-Uid":value["uid"],"X-Verified-Name":name,"X-Verified-Target":value["target"]})
+        name=verified_name_header(value["displayName"])
+        return JSONResponse(value,headers={"X-Verified-Uid":value["uid"],"X-Verified-Name-UTF8-B64":name,"X-Verified-Target":value["target"]})
 
     @app.get(config.routePrefix + "/.well-known/jwks.json")
     async def tool_keys():
@@ -184,10 +192,10 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
         who=store.consume_bootstrap(token,request.cookies.get("GatewaySession",""),False,int(clock())) if token else session(request)
         activity=config.registration.activities[who["activity"]]
         if who["role"]!="student":
-            if activity.kind!="lab": raise LaunchError("Native Student enrollment required")
+            if activity.kind not in ("lab","catalog"): raise LaunchError("Native Student enrollment required")
             return RedirectResponse("/pl/",status_code=303)
         await clients.bridge.enroll(who["uid"],config.instance,delivery["deliveryHash"])
-        await assignments.reconcile_all()
+        if activity.kind!="catalog": await assignments.reconcile_all()
         target=config.routePrefix + "/"
         if activity.kind=="lab":
             assignments.launch_work(who,activity.workId)
@@ -222,35 +230,41 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
     async def works(request:Request):
         who=session(request)
         activity=config.registration.activities[who["activity"]]
-        return {"works":[{"id":w["id"],"essayId":w.get("relatedExercise")} for w in assignments.my_works(who)],"assignment":assignments.current(who),"essays":list(assignments.essays),"role":who["role"],"administrator":administrator_allowed(who),"mode":config.flow.mode,"activityKind":activity.kind,"csrfToken":who["csrf"]}
+        catalog=activity.kind=="catalog"
+        return {"works":[{"id":w["id"],"essayId":w.get("relatedExercise")} for w in assignments.my_works(who) if not catalog or "relatedExercise" not in w],"assignment":None if catalog else assignments.current(who),"essays":[] if catalog else list(assignments.essays),"role":who["role"],"administrator":administrator_allowed(who),"mode":config.flow.mode,"activityKind":activity.kind,"csrfToken":who["csrf"]}
+
+    def assignment_session(request,write=False):
+        who=session(request,write)
+        if config.registration.activities[who["activity"]].kind=="catalog": raise LaunchError("Catalog does not grant assignment operations")
+        return who
 
     @app.get(config.routePrefix + "/teacher/roster")
     async def roster(request:Request):
-        who=session(request);assignments._teacher(who)
+        who=assignment_session(request);assignments._teacher(who)
         with store.connect() as db:
             students=[{"userId":r["id"],"name":r["name"],"assignment":assignments.current({"userId":r["id"]})} for r in db.execute("SELECT DISTINCT u.id,u.name FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.role='student' AND s.context=? AND s.resource=?",(registration["contextId"],defense.resourceLinkId))]
         return {"students":students}
 
     @app.post(config.routePrefix + "/assignments/request")
-    async def choose(body:Selection,request:Request): return await assignments.request(session(request,True),body.essayId,body.idempotencyKey)
+    async def choose(body:Selection,request:Request): return await assignments.request(assignment_session(request,True),body.essayId,body.idempotencyKey)
 
     @app.post(config.routePrefix + "/teacher/assignments")
-    async def assign(body:TeacherSelection,request:Request): return await assignments.assign(session(request,True),body.userId,body.essayId,body.idempotencyKey)
+    async def assign(body:TeacherSelection,request:Request): return await assignments.assign(assignment_session(request,True),body.userId,body.essayId,body.idempotencyKey)
 
     @app.post(config.routePrefix + "/teacher/assignments/{identifier}/approve")
-    async def approve(identifier:str,body:Empty,request:Request): return await assignments.approve(session(request,True),identifier)
+    async def approve(identifier:str,body:Empty,request:Request): return await assignments.approve(assignment_session(request,True),identifier)
 
     @app.post(config.routePrefix + "/teacher/assignments/{identifier}/reject")
-    async def reject(identifier:str,body:Empty,request:Request): return await assignments.reject(session(request,True),identifier)
+    async def reject(identifier:str,body:Empty,request:Request): return await assignments.reject(assignment_session(request,True),identifier)
 
     @app.post(config.routePrefix + "/teacher/assignments/{identifier}/reassign")
-    async def reassign(identifier:str,body:Selection,request:Request): return await assignments.reassign(session(request,True),identifier,body.essayId,body.idempotencyKey)
+    async def reassign(identifier:str,body:Selection,request:Request): return await assignments.reassign(assignment_session(request,True),identifier,body.essayId,body.idempotencyKey)
 
     @app.post(config.routePrefix + "/launch/pl/{work_id}")
     async def native_launch(work_id:str,body:Empty,request:Request):
         who=session(request,True);work=assignments.launch_work(who,work_id)
         activity=config.registration.activities[who["activity"]]
-        if activity.kind=="lab" and activity.workId!=work_id or activity.kind=="defense" and "relatedExercise" not in work: raise LaunchError("Launch from the matching Moodle activity")
+        if activity.kind=="lab" and activity.workId!=work_id or activity.kind=="defense" and "relatedExercise" not in work or activity.kind=="catalog" and "relatedExercise" in work: raise LaunchError("Launch from the matching Moodle activity")
         path=await clients.bridge.work_launch(who["uid"],config.instance,delivery["deliveryHash"],work_id)
         token=store.handoff(request.cookies["GatewaySession"],path,int(clock()))
         response=JSONResponse({"url":config.routePrefix + "/pl/"+token})

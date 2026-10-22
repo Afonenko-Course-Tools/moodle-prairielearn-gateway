@@ -61,7 +61,10 @@ class Grades:
 
     def _bind_attempt(self,db,identifier,version,evidence):
         attempt=evidence['currentAttempt']
-        selection=json.dumps(sorted((s['slotId'],s['qualifiedId']) for s in evidence['slots']))
+        # Choice binds its canonical assignment pool, not the changing best result.
+        work=self.assignments.works[evidence['workId']]
+        slots={slot['id']:slot for slot in work['slots']}
+        selection=json.dumps(sorted((s['slotId'],{'choice':sorted(slots[s['slotId']]['candidates'])} if slots[s['slotId']]['selection']=='choice' else s['qualifiedId']) for s in evidence['slots']),sort_keys=True)
         rows=db.execute('SELECT * FROM native_attempts WHERE scope=? AND version=? ORDER BY attempt_number DESC',(identifier,version)).fetchall()
         prior=next((row for row in rows if row['attempt_number']==attempt['number'] or row['attempt_id']==attempt['id']),None)
         if prior:
@@ -73,7 +76,11 @@ class Grades:
             db.execute('INSERT INTO native_attempts VALUES(?,?,?,?,?,?,?,?)',(identifier,version,evidence['instance'],evidence['deliveryHash'],evidence['workId'],attempt['id'],attempt['number'],selection))
         return True
 
+    def _catalog_binding(self, row):
+        return any(a["kind"]=="catalog" and a["resourceLinkId"]==row["resource"] and a["lineitem"]==row["lineitem"] for a in self.activities.values())
+
     def observe(self, assignment, evidence):
+        if self._catalog_binding(assignment): return None
         closed(evidence,{"schemaVersion","source","assignmentId","version","userUid","instance","deliveryHash","workId","currentAttempt","slots","completion","state"})
         now=int(self.clock())
         with self.store.transaction() as db:
@@ -96,6 +103,7 @@ class Grades:
             latest=db.execute("SELECT event_id,attempt_number,data FROM observations WHERE assignment_id=? AND version=? ORDER BY attempt_number DESC,rowid DESC LIMIT 1",(current["id"],current["version"])).fetchone()
             if latest and attempt["number"]<latest["attempt_number"]:
                 self.store.audit(db,"old-attempt-ignored",current["id"],attempt,now);return None
+            if any(q["status"]=="grading" for q in evidence["slots"]): return None
             if not any(q["status"]=="complete" and q["score"] is not None for q in evidence["slots"]): return None
             stable={**evidence,"slots":sorted(evidence["slots"],key=lambda q:q["slotId"])}
             return self._record(db,stable,latest,current["id"],current["version"],current,computed["completedRequired"],computed["requiredCount"],now)
@@ -129,6 +137,7 @@ class Grades:
             if not self._bind_attempt(db,identifier,1,evidence):return None
             if given is None or maximum is None: return None
             if not number(given) or not number(maximum) or not 0<=given<=maximum or maximum<=0: raise GatewayError("Invalid declared native lab score",503)
+            if any(q["status"]=="grading" for q in evidence["slots"]): return None
             if not any(q["status"]=="complete" and q["score"] is not None for q in evidence["slots"]): return None
             latest=db.execute("SELECT event_id,attempt_number,data FROM observations WHERE assignment_id=? ORDER BY attempt_number DESC,rowid DESC LIMIT 1",(identifier,)).fetchone()
             if latest and attempt["number"]<latest["attempt_number"]: return None
@@ -149,6 +158,7 @@ class Grades:
         for event_id in ids:
             with self.store.transaction() as db:
                 row=db.execute("SELECT * FROM outbox WHERE id=?",(event_id,)).fetchone()
+                if self._catalog_binding(row): continue
                 if row["state"] not in ("pending","sending") or row["state"]=="sending" and row["lease_until"]>now: continue
                 current=db.execute("SELECT * FROM assignments WHERE id=?",(row["assignment_id"],)).fetchone()
                 valid=bool(current and current["state"] in ACTIVE and current["instance"]==self.assignments.instance and current["delivery"]==self.assignments.delivery["deliveryHash"] and all(current[k]==row[k] for k in ("version","user_id","context","resource","delivery","lineitem"))) or self._current_lab(row,db)
@@ -182,6 +192,7 @@ class Grades:
     async def poll(self):
         with self.store.connect() as db: rows=[dict(r) for r in db.execute("SELECT * FROM assignments WHERE state IN ('assigned','approved','completed') AND instance=? AND delivery=?",(self.assignments.instance,self.assignments.delivery["deliveryHash"]))]
         for row in rows:
+            if self._catalog_binding(row): continue
             try: self.observe(row,await self.assignments.bridge.results(row["id"],row["version"]))
             except GatewayError:
                 with self.store.transaction() as db: self.store.audit(db,"result-read-failed",row["id"],{"version":row["version"]},int(self.clock()))
