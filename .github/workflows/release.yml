@@ -110,7 +110,7 @@ jobs:
               'sourceCommit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
               'repository': os.environ['RELEASE_REPOSITORY'], 'platform': 'linux/amd64',
               'image': os.environ['IMAGE_NAME'] + '@' + digest,
-              'databaseSchemaVersion': 3, 'deliverySchemaVersion': 2, 'resultsSchemaVersion': 2, 'configurationSchemaVersion': 2,
+              'databaseSchemaVersion': 3, 'deliverySchemaVersion': 3, 'resultsSchemaVersion': 2, 'configurationSchemaVersion': 2,
               'wheel': {'name': wheels[0].name, 'sha256': hashlib.sha256(wheels[0].read_bytes()).hexdigest()},
               'previousSchemas': 'rejected; fresh database required'
           }
