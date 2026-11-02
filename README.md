@@ -63,8 +63,11 @@ instance. Свежая БД утратит распознавание стары
 
 ## Текущая версия и выпуск
 
-Кандидат 2.1.0 принимает только delivery v3, results/config v2 и БД3 без
-миграций. `config/courses.example.json` показывает именованные курсы. Каждый курс
+Кандидат 2.2.0 принимает delivery v3 и v4, results/config v2 и БД3 без
+миграций. Reader v4 строго различает `project`, `native-answer` и `workspace`:
+проверяет grading, response slots, digest workspace image, seed и обязательные
+скрытые файлы. Delivery не понижается до v3; назначения, UID, ключи, регистрация,
+cookies и схема SQLite сохраняют прежний контракт. `config/courses.example.json` показывает именованные курсы. Каждый курс
 имеет собственные delivery и SQLite; вложенные конфиги не содержат schemaVersion.
 Publisher проверяет отсутствие registry tag до push, сохраняет receipt v2 с
 актуальными версиями схем и подтверждает pull фактического digest. Версия готова
