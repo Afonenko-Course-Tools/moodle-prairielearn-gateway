@@ -44,10 +44,10 @@ def test_actual_publisher_receipt_matches_current_native_contract(release):
         'schemaVersion': 2, 'versionTag': 'v2.1.0', 'sourceCommit': 'b' * 40,
         'repository': 'example/gateway', 'platform': 'linux/amd64',
         'image': 'ghcr.io/example/gateway@sha256:' + 'a' * 64,
-        'databaseSchemaVersion': 3, 'deliverySchemaVersion': 3,
+        'databaseSchemaVersion': 3, 'deliverySchemaVersion': 4,
         'resultsSchemaVersion': 2, 'configurationSchemaVersion': 2,
         'wheel': {'name': wheel.name, 'sha256': hashlib.sha256(wheel.read_bytes()).hexdigest()},
-        'previousSchemas': 'rejected; fresh database required',
+        'previousSchemas': 'delivery v3 accepted; database schema3 unchanged; older schemas rejected',
     }
 
 

@@ -6,6 +6,7 @@ import re
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .errors import GatewayError
 from .store import native_digest
+from . import delivery_v4
 
 class Closed(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -108,10 +109,12 @@ def load_delivery(path, instance):
     root=Path(path).resolve(strict=True)
     delivery=json.loads((root/"delivery.json").read_text())
     required={"schemaVersion","courseId","bookRoot","sourceSnapshotHash","inventoryHash","verificationInventoryHash","questions","gradingPayloads","works","instances","files","deliveryHash"}
-    if not isinstance(delivery,dict) or not required<=delivery.keys() or set(delivery)-required-{"candidate"} or type(delivery["schemaVersion"]) is not int or delivery["schemaVersion"]!=3 or native_digest({k:v for k,v in delivery.items() if k!="deliveryHash"})!=delivery["deliveryHash"]: raise GatewayError("Unsupported native delivery v3 identity/schema")
+    if not isinstance(delivery,dict) or not required<=delivery.keys() or set(delivery)-required-{"candidate"} or type(delivery["schemaVersion"]) is not int or delivery["schemaVersion"] not in (3,4) or native_digest({k:v for k,v in delivery.items() if k!="deliveryHash"})!=delivery["deliveryHash"]: raise GatewayError("Unsupported native delivery v3/v4 identity/schema")
+    if delivery['schemaVersion']==4:delivery_v4.validate_base(delivery)
     questions=delivery['questions']
     if not isinstance(questions,list) or not questions or any(not isinstance(q,str) or not re.fullmatch(re.escape(delivery['courseId'])+r'/exr-[a-z0-9][a-z0-9-]*',q) for q in questions) or len(set(questions))!=len(questions): raise GatewayError('Invalid native question catalog')
-    _delivery_bindings(delivery,questions)
+    if delivery['schemaVersion']==4:delivery_v4.validate_bindings(delivery,questions,_delivery_bindings)
+    else:_delivery_bindings(delivery,questions)
     for name,sha in delivery["files"].items():
         if not isinstance(name,str) or name.startswith("/") or any(s in ("",".","..") for s in name.split("/")) or not isinstance(sha,str) or not re.fullmatch("[a-f0-9]{64}",sha): raise GatewayError("Unsafe native delivery inventory")
         file=root/name
