@@ -21,3 +21,10 @@ def test_symlink_rejected(tmp_path):
 def test_native_uuid_and_slot_binding_remain_closed(tmp_path):
  d=fixture(tmp_path);d['gradingPayloads']['demo/exr-a']['uuid']='not-uuid';save(tmp_path,d)
  with pytest.raises(GatewayError):load_delivery(tmp_path,'fixture')
+@pytest.mark.parametrize('layout',['files','zip','files-or-zip'])
+def test_upload_layout_preserved(tmp_path,layout):
+ d=fixture(tmp_path);d['gradingPayloads']['demo/exr-a']['submission']['layout']=layout;save(tmp_path,d);assert load_delivery(tmp_path,'fixture')['gradingPayloads']['demo/exr-a']['submission']['layout']==layout
+@pytest.mark.parametrize('submission',[{'mode':'editor','layout':'zip'},{'mode':'upload','layout':'unknown'}])
+def test_invalid_layout_refused(tmp_path,submission):
+ d=fixture(tmp_path);d['gradingPayloads']['demo/exr-a']['submission']=submission;save(tmp_path,d)
+ with pytest.raises(GatewayError):load_delivery(tmp_path,'fixture')

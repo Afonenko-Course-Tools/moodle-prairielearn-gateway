@@ -97,7 +97,8 @@ def _delivery_bindings(delivery,questions):
         if set(binding)!=fields or not relative(binding['sourceRoot']):raise GatewayError('Closed method-specific question binding required')
         if not isinstance(binding['uuid'],str) or not re.fullmatch(r'[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}',binding['uuid']) or binding['uuid'] in uuids:raise GatewayError('Unique native UUIDs required')
         uuids.add(binding['uuid'])
-        if not isinstance(submission,dict) or not {'mode'}<=set(submission) or set(submission)-{'mode','aceMode'} or submission['mode'] not in ('editor','upload') or submission['mode']=='upload' and 'aceMode' in submission or manual and submission['mode']!='upload':raise GatewayError('Closed native input contract required')
+        if not isinstance(submission,dict) or not {'mode'}<=set(submission) or set(submission)-{'mode','aceMode','layout'} or submission['mode'] not in ('editor','upload') or submission['mode']=='upload' and 'aceMode' in submission or manual and submission['mode']!='upload':raise GatewayError('Closed native input contract required')
+        if 'layout' in submission and (submission['mode']!='upload' or submission['layout'] not in ('files','zip','files-or-zip')):raise GatewayError('Invalid native upload layout')
         if 'aceMode' in submission and (not isinstance(submission['aceMode'],str) or not re.fullmatch(r'ace/mode/[a-z][a-z0-9_]*',submission['aceMode'])):raise GatewayError('Invalid editor language')
         if not manual:
             if any(not isinstance(binding[k],str) or not binding[k] for k in ('runtime','projectCheck')) or not isinstance(binding['sources'],list) or not binding['sources']:raise GatewayError('Automatic runtime/source binding required')
