@@ -108,7 +108,7 @@ async def test_real_signed_http_launch_cookie_binding_bootstrap_and_replay(tmp_p
         who=app.state.store.session(http.cookies["GatewaySession"],1000)
         assert who["subject"]=="synthetic-student" and who["uid"].endswith("@example.invalid")
         assert (await http.get("/gateway/courses/demo/bootstrap")).status_code==303
-        assert enrolled==[(who["uid"],"pilot","a"*64)]
+        assert enrolled==[(who["uid"],"pilot","demo")]
         app.state.handoff_secret="s"*32
         handoff=launched.headers["location"].split("/")[-1]
         reply=await http.get("/internal/handoff/courses/demo/"+handoff,headers={"Authorization":"Bearer "+"s"*32})

@@ -36,7 +36,7 @@ class Grades:
         event_id=digest({"scope":[identifier,version],"evidence":stable,"previousEvent":latest["event_id"] if latest else None})
         payload={"userId":binding["subject"],"scoreGiven":given,"scoreMaximum":maximum,"activityProgress":"Completed","gradingProgress":"FullyGraded","timestamp":self._timestamp(db,binding["user_id"],binding["lineitem"],now)}
         db.execute("INSERT INTO observations VALUES(?,?,?,?,?,?)",(event_id,identifier,version,stable["currentAttempt"]["number"],json.dumps(stable,sort_keys=True),now))
-        db.execute("INSERT INTO outbox(id,assignment_id,version,user_id,context,resource,delivery,lineitem,payload,created) VALUES(?,?,?,?,?,?,?,?,?,?)",(event_id,identifier,version,binding["user_id"],binding["context"],binding["resource"],self.assignments.delivery["deliveryHash"],binding["lineitem"],json.dumps(payload,sort_keys=True),now))
+        db.execute("INSERT INTO outbox(id,assignment_id,version,user_id,context,resource,delivery,lineitem,payload,created) VALUES(?,?,?,?,?,?,?,?,?,?)",(event_id,identifier,version,binding["user_id"],binding["context"],binding["resource"],self.assignments.delivery["courseId"],binding["lineitem"],json.dumps(payload,sort_keys=True),now))
         return payload
 
     def _slots(self, work, evidence, *, not_started=False):
@@ -70,10 +70,10 @@ class Grades:
         if prior:
             if prior['attempt_id']!=attempt['id'] or prior['attempt_number']!=attempt['number']:raise GatewayError('Conflicting current attempt',503)
             if prior['selection']!=selection:raise GatewayError('Selected question changed within native attempt',503)
-            if any(prior[key]!=evidence[field] for key,field in [('instance','instance'),('delivery','deliveryHash'),('work','workId')]):raise GatewayError('Conflicting native attempt scope',503)
+            if any(prior[key]!=evidence[field] for key,field in [('instance','instance'),('delivery','courseKey'),('work','workId')]):raise GatewayError('Conflicting native attempt scope',503)
         if rows and attempt['number']<rows[0]['attempt_number']:return False
         if not prior:
-            db.execute('INSERT INTO native_attempts VALUES(?,?,?,?,?,?,?,?)',(identifier,version,evidence['instance'],evidence['deliveryHash'],evidence['workId'],attempt['id'],attempt['number'],selection))
+            db.execute('INSERT INTO native_attempts VALUES(?,?,?,?,?,?,?,?)',(identifier,version,evidence['instance'],evidence['courseKey'],evidence['workId'],attempt['id'],attempt['number'],selection))
         return True
 
     def _catalog_binding(self, row):
@@ -81,15 +81,15 @@ class Grades:
 
     def observe(self, assignment, evidence):
         if self._catalog_binding(assignment): return None
-        closed(evidence,{"schemaVersion","source","assignmentId","version","userUid","instance","deliveryHash","workId","currentAttempt","slots","completion","state"})
+        closed(evidence,{"schemaVersion","source","assignmentId","version","userUid","instance","courseKey","workId","currentAttempt","slots","completion","state"})
         now=int(self.clock())
         with self.store.transaction() as db:
             current=db.execute("SELECT a.*,u.uid,u.subject FROM assignments a JOIN users u ON u.id=a.user_id WHERE a.id=?",(assignment["id"],)).fetchone()
-            if not current or current["state"] not in ACTIVE or current["delivery"]!=self.assignments.delivery["deliveryHash"] or current["instance"]!=self.assignments.instance or any(current[k]!=assignment[k] for k in ("version","delivery","work","user_id","context","resource","lineitem")):
+            if not current or current["state"] not in ACTIVE or current["delivery"]!=self.assignments.delivery["courseId"] or current["instance"]!=self.assignments.instance or any(current[k]!=assignment[k] for k in ("version","delivery","work","user_id","context","resource","lineitem")):
                 self.store.audit(db,"old-result-ignored",assignment["id"],{"version":assignment["version"]},now)
                 return None
             self.assignments._binding(current)
-            expected={"schemaVersion":2,"source":"per-slot-results-v2","assignmentId":current["id"],"version":current["version"],"userUid":current["uid"],"instance":current["instance"],"deliveryHash":current["delivery"],"workId":current["work"]}
+            expected={"schemaVersion":2,"source":"per-slot-results-v2","assignmentId":current["id"],"version":current["version"],"userUid":current["uid"],"instance":current["instance"],"courseKey":current["delivery"],"workId":current["work"]}
             if any(evidence[k]!=v or type(evidence[k]) is not type(v) for k,v in expected.items()): raise GatewayError("Result identity/version binding rejected",503)
             work=self.assignments.works[current["work"]]
             computed=self._slots(work,evidence["slots"],not_started=self._state(evidence))
@@ -109,10 +109,10 @@ class Grades:
             return self._record(db,stable,latest,current["id"],current["version"],current,computed["completedRequired"],computed["requiredCount"],now)
 
     def _lab_id(self,user_id,activity):
-        return "lab-"+digest([user_id,activity,self.assignments.delivery["deliveryHash"]])
+        return "lab-"+digest([user_id,activity,self.assignments.delivery["courseId"]])
 
     def observe_lab(self,binding,evidence):
-        fields={"schemaVersion","source","userUid","instance","deliveryHash","workId","currentAttempt","slots","completion","state","scoreGiven","scoreMaximum"}
+        fields={"schemaVersion","source","userUid","instance","courseKey","workId","currentAttempt","slots","completion","state","scoreGiven","scoreMaximum"}
         closed(evidence,fields)
         activity=self.activities.get(binding["activity"])
         if not activity or activity["kind"]!="lab": raise GatewayError("Registered lab activity required",503)
@@ -122,7 +122,7 @@ class Grades:
         with self.store.transaction() as db:
             current=db.execute("SELECT b.*,u.uid,u.subject FROM activity_bindings b JOIN users u ON u.id=b.user_id WHERE b.user_id=? AND b.activity=?",(binding["user_id"],binding["activity"])).fetchone()
             if not current or current["resource"]!=activity["resourceLinkId"] or current["lineitem"]!=activity["lineitem"] or current["context"]!=self.assignments.flow.get("contextId",current["context"]) or any(current[k]!=binding[k] for k in ("context","resource","lineitem")): raise GatewayError("Lab activity/context binding rejected",503)
-            expected={"schemaVersion":2,"source":"per-slot-results-v2","userUid":current["uid"],"instance":self.assignments.instance,"deliveryHash":self.assignments.delivery["deliveryHash"],"workId":work["id"]}
+            expected={"schemaVersion":2,"source":"per-slot-results-v2","userUid":current["uid"],"instance":self.assignments.instance,"courseKey":self.assignments.delivery["courseId"],"workId":work["id"]}
             if any(evidence[k]!=v or type(evidence[k]) is not type(v) for k,v in expected.items()): raise GatewayError("Native lab identity/version mismatch",503)
             completion=self._slots(work,evidence["slots"],not_started=self._state(evidence))
             closed(evidence["completion"],completion)
@@ -146,7 +146,7 @@ class Grades:
 
     def _current_lab(self,row,db):
         for activity,config in self.activities.items():
-            if config["kind"]=="lab" and self._lab_id(row["user_id"],activity)==row["assignment_id"] and row["delivery"]==self.assignments.delivery["deliveryHash"] and row["version"]==1:
+            if config["kind"]=="lab" and self._lab_id(row["user_id"],activity)==row["assignment_id"] and row["delivery"]==self.assignments.delivery["courseId"] and row["version"]==1:
                 binding=db.execute("SELECT * FROM activity_bindings WHERE user_id=? AND activity=?",(row["user_id"],activity)).fetchone()
                 return bool(binding and binding["context"]==self.assignments.flow.get("contextId",binding["context"]) and binding["resource"]==config["resourceLinkId"] and binding["lineitem"]==config["lineitem"] and all(binding[k]==row[k] for k in ("context","resource","lineitem")))
         return False
@@ -161,12 +161,12 @@ class Grades:
                 if self._catalog_binding(row): continue
                 if row["state"] not in ("pending","sending") or row["state"]=="sending" and row["lease_until"]>now: continue
                 current=db.execute("SELECT * FROM assignments WHERE id=?",(row["assignment_id"],)).fetchone()
-                valid=bool(current and current["state"] in ACTIVE and current["instance"]==self.assignments.instance and current["delivery"]==self.assignments.delivery["deliveryHash"] and all(current[k]==row[k] for k in ("version","user_id","context","resource","delivery","lineitem"))) or self._current_lab(row,db)
+                valid=bool(current and current["state"] in ACTIVE and current["instance"]==self.assignments.instance and current["delivery"]==self.assignments.delivery["courseId"] and all(current[k]==row[k] for k in ("version","user_id","context","resource","delivery","lineitem"))) or self._current_lab(row,db)
                 if current:
                     try:self.assignments._binding(current)
                     except GatewayError:valid=False
                 latest=db.execute("SELECT event_id,attempt_number,data FROM observations WHERE assignment_id=? AND version=? ORDER BY attempt_number DESC,rowid DESC LIMIT 1",(row["assignment_id"],row["version"])).fetchone()
-                valid=valid and row["delivery"]==self.assignments.delivery["deliveryHash"] and latest and latest["event_id"]==event_id and json.loads(latest["data"])["instance"]==self.assignments.instance
+                valid=valid and row["delivery"]==self.assignments.delivery["courseId"] and latest and latest["event_id"]==event_id and json.loads(latest["data"])["instance"]==self.assignments.instance
                 bound=db.execute('SELECT attempt_number FROM native_attempts WHERE scope=? AND version=? ORDER BY attempt_number DESC LIMIT 1',(row['assignment_id'],row['version'])).fetchone()
                 valid=valid and bound and latest['attempt_number']==bound['attempt_number']
                 if not valid:
@@ -190,7 +190,7 @@ class Grades:
                 self.store.audit(db,"ags-score-sent",event_id,{"assignment":row["assignment_id"],"version":row["version"]},now)
 
     async def poll(self):
-        with self.store.connect() as db: rows=[dict(r) for r in db.execute("SELECT * FROM assignments WHERE state IN ('assigned','approved','completed') AND instance=? AND delivery=?",(self.assignments.instance,self.assignments.delivery["deliveryHash"]))]
+        with self.store.connect() as db: rows=[dict(r) for r in db.execute("SELECT * FROM assignments WHERE state IN ('assigned','approved','completed') AND instance=? AND delivery=?",(self.assignments.instance,self.assignments.delivery["courseId"]))]
         for row in rows:
             if self._catalog_binding(row): continue
             try: self.observe(row,await self.assignments.bridge.results(row["id"],row["version"]))
@@ -200,7 +200,7 @@ class Grades:
         for binding in bindings:
             activity=self.activities.get(binding["activity"])
             if not activity or activity["kind"]!="lab": continue
-            try: self.observe_lab(binding,await self.assignments.bridge.work_results(binding["uid"],self.assignments.instance,self.assignments.delivery["deliveryHash"],activity["workId"]))
+            try: self.observe_lab(binding,await self.assignments.bridge.work_results(binding["uid"],self.assignments.instance,self.assignments.delivery["courseId"],activity["workId"]))
             except GatewayError:
                 with self.store.transaction() as db:self.store.audit(db,"lab-read-failed",binding["user_id"],{"activity":binding["activity"]},int(self.clock()))
         await self.drain()

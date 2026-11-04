@@ -5,8 +5,6 @@ import json
 import secrets
 import sqlite3
 import time
-import math
-from decimal import Decimal
 from .errors import LaunchError, GatewayError
 import fcntl
 
@@ -14,29 +12,6 @@ def digest(value):
     if not isinstance(value, str):
         value = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(value.encode()).hexdigest()
-
-def native_digest(value):
-    """Owner wire format: scalar-sorted keys, UTF-8, ECMAScript JSON numbers.
-
-    Keep identity digest separate: its established compact JSON tuple uses ASCII
-    escaping, as the verified Moodle identity spike does.
-    """
-    def canonical(item):
-        if isinstance(item,dict):
-            return "{"+",".join(json.dumps(key,ensure_ascii=False)+":"+canonical(item[key]) for key in sorted(item))+"}"
-        if isinstance(item,list):return "["+",".join(map(canonical,item))+"]"
-        if type(item) is float:
-            if not math.isfinite(item):raise ValueError("Non-finite native JSON")
-            if item==0:return "0"
-            shortest=repr(item)
-            if 1e-6<=abs(item)<1e21:
-                text=format(Decimal(shortest),"f")
-                return text.rstrip("0").rstrip(".") if "." in text else text
-            mantissa,exponent=shortest.split("e")
-            exponent=int(exponent)
-            return mantissa.rstrip("0").rstrip(".")+"e"+("+" if exponent>=0 else "-")+str(abs(exponent))
-        return json.dumps(item,ensure_ascii=False,allow_nan=False,separators=(",",":"))
-    return hashlib.sha256(canonical(value).encode()).hexdigest()
 
 class Store:
     @staticmethod

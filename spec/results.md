@@ -2,7 +2,7 @@
 
 Единственный транспорт: `schemaVersion:2`, `source:per-slot-results-v2`. Defense
 добавляет assignmentId/version; lab сохраняет scoreGiven/scoreMaximum. Оба ответа
-содержат userUid/instance/deliveryHash/workId, state/currentAttempt/slots/completion.
+содержат userUid/instance/courseKey/workId, state/currentAttempt/slots/completion.
 Старые results и delivery отклоняются. Gateway получает результаты только от
 аутентифицированного private Bridge; публичных callbacks с оценкой нет.
 

@@ -53,16 +53,16 @@ async def test_new_instance_preserves_session_csrf_and_old_assignment_only_with_
     with store.connect() as db:
         old_requests=[dict(row) for row in db.execute("SELECT * FROM requests WHERE assignment_id=?",(legacy["id"],))]
 
-    next_delivery=copy.deepcopy(delivery());next_delivery["deliveryHash"]="b"*64
+    next_delivery=copy.deepcopy(delivery())
     next_delivery["instances"]={"2026-2027-s1":{"works":["defense-a","defense-b","lab"]}}
     config.update(instance="2026-2027-s1",deliveryPath="/private/new-native-course")
     restarted=Store(store.path if retain_database else tmp_path/"fresh.sqlite")
     config["database"]=str(restarted.path)
     class Native(Bridge):
         async def enroll(self,uid,instance,delivery_hash):
-            assert (uid,instance,delivery_hash)==("student@example.invalid","2026-2027-s1","b"*64)
+            assert (uid,instance,delivery_hash)==("student@example.invalid","2026-2027-s1","demo")
         async def work_launch(self,uid,instance,delivery_hash,work):
-            assert (uid,instance,delivery_hash,work)==("student@example.invalid","2026-2027-s1","b"*64,"lab")
+            assert (uid,instance,delivery_hash,work)==("student@example.invalid","2026-2027-s1","demo","lab")
             return "/pl/course_instance/999/assessment/999/"
     class Clients:
         bridge=Native()
@@ -91,7 +91,7 @@ async def test_new_instance_preserves_session_csrf_and_old_assignment_only_with_
             headers["X-CSRF-Token"]=defense["csrf"]
             selected=await client.post("/gateway/courses/java/assignments/request",headers=headers,json={"essayId":"exr-essay-b","idempotencyKey":"new-semester-request"})
             assert selected.status_code==200
-            assert selected.json()["instance"]=="2026-2027-s1" and selected.json()["delivery"]=="b"*64
+            assert selected.json()["instance"]=="2026-2027-s1" and selected.json()["delivery"]=="demo"
             assert selected.json()["id"]!=legacy["id"] and selected.json()["state"]=="assigned"
     with store.connect() as db:
         assert dict(db.execute("SELECT * FROM assignments WHERE id=?",(legacy["id"],)).fetchone())==legacy

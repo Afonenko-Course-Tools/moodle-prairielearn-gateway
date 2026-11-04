@@ -7,7 +7,7 @@ Standalone конфигурация отклоняется. Курсы испо�
 проверяется до Store. Новая БД сразу получает схему3; прежняя БД отклоняется read-only
 до WAL и writable connection. Автоматических миграций и aliases нет.
 
-Delivery hash и полный inventory проверяются при startup. Доступны только works
+При запуске читается функциональный Native-каталог версии 5. Доступны только works
 выбранного instance. Defense имеет канонический relatedExercise и native student-label;
 обычный lab не имеет relatedExercise. Каждый essay соответствует одному defense
 в instance. Сходство ID не задаёт отношение.
@@ -31,7 +31,7 @@ reconciling и затем approved. Rejected не имеет access; после�
 новый request. Полное достижение pass.at-least может перевести active в completed.
 
 Bridge получает stable assignmentId и закрытый version, server-derived userUid,
-instance/deliveryHash/oldWork/newWork. Ответ подтверждает ту же scope и reconciled.
+instance/courseKey/oldWork/newWork. Ответ подтверждает ту же scope и reconciled.
 Version начинается с1 и возрастает на каждом native transition. Replacement
 сохраняет assignmentId, снимает старую метку и подтверждает новую до activation.
 Неудача сохраняет durable reconciliation intent для повторения после restart.

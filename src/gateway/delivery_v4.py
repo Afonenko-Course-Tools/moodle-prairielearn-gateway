@@ -1,10 +1,10 @@
-"""Закрытые bindings v4, согласованные с Platform bridge/delivery.mjs."""
+"""Закрытые bindings v5, согласованные с Platform bridge/delivery.mjs."""
 import re
 from .errors import GatewayError
 
 def require(condition):
     if not condition:
-        raise GatewayError('Invalid native delivery v4 contract')
+        raise GatewayError('Invalid native delivery v5 contract')
 
 def closed(value, required, optional=()):
     require(isinstance(value,dict) and set(required)<=set(value) and not set(value)-set(required)-set(optional))
@@ -15,17 +15,14 @@ def text(value):
 def relative(value):
     return text(value) and not value.startswith('/') and not re.match(r'^[A-Za-z]:',value) and not re.search(r'[\x00-\x1f\x7f]',value) and '\\' not in value and not any(p in ('','.','..') for p in value.split('/'))
 
-def hash_value(value):
-    return isinstance(value,str) and re.fullmatch(r'[a-f0-9]{64}',value) is not None
-
 def ids(value):
     return isinstance(value,list) and bool(value) and all(text(v) for v in value) and len(set(value))==len(value)
 
 def validate_base(d):
     require(isinstance(d['courseId'],str) and re.fullmatch(r'[a-z][a-z0-9-]*',d['courseId']) is not None)
-    require(isinstance(d['bookRoot'],str) and all(hash_value(d[k]) for k in ('sourceSnapshotHash','inventoryHash','verificationInventoryHash','deliveryHash')))
+    require(isinstance(d['bookRoot'],str))
     require('candidate' not in d or type(d['candidate']) is bool)
-    require(isinstance(d['files'],dict) and isinstance(d['instances'],dict) and isinstance(d['works'],list) and bool(d['works']))
+    require(isinstance(d['files'],list) and len(set(d['files']))==len(d['files']) and all(relative(f) for f in d['files']) and isinstance(d['instances'],dict) and isinstance(d['works'],list) and bool(d['works']))
     work_ids=[]
     for work in d['works']:
         closed(work,{'id','slots','policy','completion'},{'relatedExercise'})
@@ -87,8 +84,8 @@ def workspace(b):
     require(ids(files) and len(files)<=128 and all(relative(f) for f in files) and all(f in files for f in ('work/**','work/.git/**','work/.*','explanation.m[d]','.pl-seed/identity.jso[n]')))
     require(all(k not in options or type(options[k]) is bool for k in ('rewriteUrl','enableNetworking')))
     seed=b['seed']
-    closed(seed,{'schema','archive','archiveSha256','manifest','manifestSha256'})
-    require(seed['schema']=='pl-git-workspace-seed-v1' and seed['archive']=='workspace/.pl-seed/starter.zip' and seed['manifest']=='workspace/.pl-seed/manifest.json' and hash_value(seed['archiveSha256']) and hash_value(seed['manifestSha256']))
+    closed(seed,{'schema','archive','manifest'})
+    require(seed['schema']=='pl-git-workspace-seed-v1' and seed['archive']=='workspace/.pl-seed/starter.zip' and seed['manifest']=='workspace/.pl-seed/manifest.json')
 
 def validate_bindings(d, questions, project_validator):
     bindings=d['gradingPayloads']

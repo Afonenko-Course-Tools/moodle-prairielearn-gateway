@@ -22,7 +22,7 @@ def delivery():
         slots=[{'id':'demo/'+id+'/exr-'+str(i),'selection':'fixed','candidates':['demo/exr-'+str(i)],'assignment':{'requirement':'required','workMode':'individual'}} for i in (1,2,3)]
         policy={'schemaVersion':2,'mode':'required-slot-completion','source':'per-slot-results-v2','slotIds':[s['id'] for s in slots],'requiredSlotIds':[s['id'] for s in slots],'atLeast':2,'fullyCompletedScore':1}
         return {'id':id,'slots':slots,'completion':policy,**({'relatedExercise':essay} if essay else {})}
-    return {'schemaVersion':2,'deliveryHash':'a'*64,'courseId':'demo','questions':['demo/exr-'+str(i) for i in (1,2,3)],'instances':{'pilot':{'works':['defense-a','defense-b','lab']}},'works':[work('defense-a','exr-essay-a'),work('defense-b','exr-essay-b'),work('lab')]}
+    return {'schemaVersion':2,'courseId':'demo','questions':['demo/exr-'+str(i) for i in (1,2,3)],'instances':{'pilot':{'works':['defense-a','defense-b','lab']}},'works':[work('defense-a','exr-essay-a'),work('defense-b','exr-essay-b'),work('lab')]}
 
 @pytest.fixture
 def setup(tmp_path):
@@ -100,10 +100,10 @@ async def test_foreign_defense_direct_url_denied_and_roster_scope(setup):
     with pytest.raises(GatewayError): await service.approve(student,service.current(student)["id"])
 
 @pytest.mark.anyio
-async def test_upgrade_or_changed_moodle_binding_cannot_mutate_pending_request(setup):
+async def test_foreign_course_or_changed_moodle_binding_cannot_mutate_pending_request(setup):
     store,_,student,teacher,factory=setup;old=factory("approval")
     row=await old.request(student,"exr-essay-a","pending")
-    upgraded=delivery();upgraded["deliveryHash"]="b"*64
+    upgraded=delivery();upgraded["courseId"]="other"
     service=Assignments(store,Bridge(),upgraded,"pilot",{"mode":"approval","capacity":{}},clock=lambda:1000)
     for operation in (service.approve,service.reject):
         with pytest.raises(GatewayError):await operation(teacher,row["id"])

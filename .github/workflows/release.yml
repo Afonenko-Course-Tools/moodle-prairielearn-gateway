@@ -110,9 +110,9 @@ jobs:
               'sourceCommit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
               'repository': os.environ['RELEASE_REPOSITORY'], 'platform': 'linux/amd64',
               'image': os.environ['IMAGE_NAME'] + '@' + digest,
-              'databaseSchemaVersion': 3, 'deliverySchemaVersion': 4, 'resultsSchemaVersion': 2, 'configurationSchemaVersion': 2,
+              'databaseSchemaVersion': 3, 'deliverySchemaVersion': 5, 'resultsSchemaVersion': 2, 'configurationSchemaVersion': 2,
               'wheel': {'name': wheels[0].name, 'sha256': hashlib.sha256(wheels[0].read_bytes()).hexdigest()},
-              'previousSchemas': 'delivery v3 accepted; database schema3 unchanged; older schemas rejected'
+              'previousSchemas': 'delivery v5; database schema3 unchanged; older own delivery schemas rejected'
           }
           pathlib.Path('dist/release-images.json').write_text(json.dumps(receipt, indent=2) + '\n')
           PY

@@ -53,20 +53,17 @@ def current_delivery():
     value['instances']['pilot']['works'] = WORKS + ['defense-a']
     value['questions'] += ['demo/'+q for group in groups for q in group]
     import uuid
-    value['gradingPayloads'] = {q:{'uuid':str(uuid.UUID(int=i+1)),'grading':{'method':'manual'},
+    value['gradingPayloads'] = {q:{'kind':'project','uuid':str(uuid.UUID(int=i+1,version=4)),'grading':{'method':'manual'},
         'submission':{'mode':'upload'},'sourceRoot':'projects/fictional-'+str(i)} for i,q in enumerate(value['questions'])}
-    value.update(schemaVersion=3,bookRoot='tasks',sourceSnapshotHash='b'*64,inventoryHash='c'*64,
-                 verificationInventoryHash='d'*64,files={})
+    value.update(schemaVersion=5,bookRoot='tasks',files=[])
+    for instance in value['instances'].values():instance['selfEnrollment']=False
     return value
 
 
 def test_catalog_uses_valid_manual_v3_selected_delivery(tmp_path):
     import json
     from gateway.config import load_delivery
-    from gateway.store import native_digest
     value = current_delivery()
-    del value['deliveryHash']
-    value['deliveryHash'] = native_digest(value)
     (tmp_path/'delivery.json').write_text(json.dumps(value))
     actual = load_delivery(tmp_path, 'pilot')
     ordinary = [w for w in actual['works'] if w['id'] in WORKS]
@@ -160,7 +157,7 @@ async def test_catalog_signed_relogin_five_works_and_history_never_post_scores(c
             for work in ('defense-a','defense-b','foreign','foreign-instance-work','sec-pl-streams-pilot'):
                 assert (await c.post(PREFIX+'/launch/pl/'+work,json={},headers=headers)).status_code == 403
             assert (await c.post(PREFIX+'/launch/pl/'+WORKS[0],json={})).status_code == 403
-            for forged in ({'deliveryHash':'forged'}, {'instance':'other'}, {'userUid':b['uid']}, {'role':'teacher'}):
+            for forged in ({'courseKey':'forged'}, {'instance':'other'}, {'userUid':b['uid']}, {'role':'teacher'}):
                 assert (await c.post(PREFIX+'/launch/pl/'+WORKS[0],json=forged,headers=headers)).status_code == 422
             assert (await c.post(PREFIX+'/launch/pl/defense-a',json={},headers={**headers,'X-Gateway-Role':'teacher'})).status_code == 403
             for path, data in [('assignments/request',{'essayId':'exr-essay-a','idempotencyKey':'new'}), ('teacher/assignments',{'userId':a['userId'],'essayId':'exr-essay-a','idempotencyKey':'new'}), ('teacher/assignments/old/approve',{}),('teacher/assignments/old/reject',{}),('teacher/assignments/old/reassign',{'essayId':'exr-essay-a','idempotencyKey':'new'})]:

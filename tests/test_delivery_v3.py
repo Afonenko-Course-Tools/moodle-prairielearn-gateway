@@ -2,14 +2,13 @@
 import copy,json,hashlib
 import pytest
 from gateway.config import load_delivery
-from gateway.store import native_digest
 from gateway.errors import GatewayError
 
 def fixture(tmp_path):
  q='demo/exr-a';slot='demo/lab/exr-a';p=tmp_path/'public.txt';p.write_text('SYNTHETIC')
- return {'schemaVersion':3,'courseId':'demo','bookRoot':'tasks','sourceSnapshotHash':'a'*64,'inventoryHash':'b'*64,'verificationInventoryHash':'c'*64,'questions':[q],'gradingPayloads':{q:{'uuid':'37d79ee7-fd7d-44db-bd45-6587711862a5','grading':{'method':'manual'},'submission':{'mode':'upload'},'sourceRoot':'projects/a'}},'works':[{'id':'lab','slots':[{'id':slot,'selection':'fixed','candidates':[q],'assignment':{'requirement':'required','workMode':'individual'}}],'policy':{},'completion':{'schemaVersion':2,'mode':'required-slot-completion','source':'per-slot-results-v2','slotIds':[slot],'requiredSlotIds':[slot],'atLeast':1,'fullyCompletedScore':1}}],'instances':{'fixture':{'works':['lab'],'selfEnrollment':False}},'files':{'public.txt':hashlib.sha256(p.read_bytes()).hexdigest()}}
+ return {'schemaVersion':5,'courseId':'demo','bookRoot':'tasks','questions':[q],'gradingPayloads':{q:{'kind':'project','uuid':'37d79ee7-fd7d-44db-bd45-6587711862a5','grading':{'method':'manual'},'submission':{'mode':'upload'},'sourceRoot':'projects/a'}},'works':[{'id':'lab','slots':[{'id':slot,'selection':'fixed','candidates':[q],'assignment':{'requirement':'required','workMode':'individual'}}],'policy':{},'completion':{'schemaVersion':2,'mode':'required-slot-completion','source':'per-slot-results-v2','slotIds':[slot],'requiredSlotIds':[slot],'atLeast':1,'fullyCompletedScore':1}}],'instances':{'fixture':{'works':['lab'],'selfEnrollment':False}},'files':['public.txt']}
 def save(tmp_path,value):
- value=copy.deepcopy(value);value['deliveryHash']=native_digest(value);(tmp_path/'delivery.json').write_text(json.dumps(value));return value
+ value=copy.deepcopy(value);(tmp_path/'delivery.json').write_text(json.dumps(value));return value
 
 def test_exact_v3_grading_and_submission_required(tmp_path):
  d=fixture(tmp_path);save(tmp_path,d);assert load_delivery(tmp_path,'fixture')['gradingPayloads']['demo/exr-a']['grading']['method']=='manual'

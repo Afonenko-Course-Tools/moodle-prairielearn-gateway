@@ -29,7 +29,7 @@ async def test_representative_changes_only_for_canonical_choice_pool(tmp_path,se
  slot['candidates'].pop()
  bad=copy.deepcopy(b);bad['slots'][0]['qualifiedId']='demo/foreign'
  with pytest.raises(GatewayError):grades.observe(row,bad)
- for field,value in [('deliveryHash','b'*64),('instance','other')]:
+ for field,value in [('courseKey','b'*64),('instance','other')]:
   bad=copy.deepcopy(b);bad[field]=value
   with pytest.raises(GatewayError):grades.observe(row,bad)
  bad=copy.deepcopy(b);bad['currentAttempt']['id']='conflicting-same-number'

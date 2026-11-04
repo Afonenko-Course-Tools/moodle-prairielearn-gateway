@@ -33,7 +33,7 @@ def test_unsupported_delivery_rejected_before_database_write(tmp_path):
  from test_config import example
  native=tmp_path/'native';native.mkdir();(native/'delivery.json').write_text(json.dumps({'schemaVersion':1}))
  config=example();config['database']=str(tmp_path/'untouched/runtime.sqlite');config['deliveryPath']=str(native)
- with pytest.raises(GatewayError,match='schema'):create_app(config)
+ with pytest.raises(GatewayError,match='delivery'):create_app(config)
  assert not (tmp_path/'untouched').exists()
 
 @pytest.mark.anyio

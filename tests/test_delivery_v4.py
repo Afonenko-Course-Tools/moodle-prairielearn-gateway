@@ -17,7 +17,7 @@ def binding(kind):
                 'image':'example.invalid/workspace@sha256:'+'a'*64,'home':'/home/pl','port':8080,
                 'gradedFiles':['work/**','work/.git/**','work/.*','explanation.m[d]','.pl-seed/identity.jso[n]']}},
             seed={'schema':'pl-git-workspace-seed-v1','archive':'workspace/.pl-seed/starter.zip',
-                'archiveSha256':'b'*64,'manifest':'workspace/.pl-seed/manifest.json','manifestSha256':'c'*64},
+                'manifest':'workspace/.pl-seed/manifest.json'},
             upstreamGradingMethod='Manual',singleVariant=True)
     slots=[{'name':'answer','type':kind,'anchor':'answer'}]
     if kind == 'single-choice':
@@ -33,7 +33,7 @@ def binding(kind):
                 responseSlots=slots,upstreamGradingMethod='Manual' if method=='manual' else 'Internal')
 
 def delivery(tmp_path, kind):
-    d=fixture(tmp_path);d['schemaVersion']=4;d['gradingPayloads']['demo/exr-a']=binding(kind)
+    d=fixture(tmp_path);d['schemaVersion']=5;d['gradingPayloads']['demo/exr-a']=binding(kind)
     return d
 
 @pytest.mark.parametrize('kind',['project','workspace','manual','numeric','single-choice','matching','multipart'])
@@ -86,7 +86,7 @@ def test_v4_same_uuid_across_kinds_refused(tmp_path):
     d['gradingPayloads']['demo/exr-b']=binding('workspace');save(tmp_path,d)
     with pytest.raises(GatewayError):load_delivery(tmp_path,'fixture')
 
-def test_v4_hash_and_payload_still_required(tmp_path):
+def test_updated_public_bytes_need_no_fingerprint(tmp_path):
     d=delivery(tmp_path,'numeric');save(tmp_path,d)
     (tmp_path/'public.txt').write_text('CHANGED')
-    with pytest.raises(GatewayError):load_delivery(tmp_path,'fixture')
+    assert load_delivery(tmp_path,'fixture')['courseId']=='demo'

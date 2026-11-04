@@ -13,7 +13,7 @@ class AGS:
         self.sent.append((lineitem,copy.deepcopy(payload),key))
 
 def result(row, uid, scores=(1,1,0)):
-    return {"schemaVersion":2,"source":"per-slot-results-v2","state":"started","assignmentId":row["id"],"version":row["version"],"userUid":uid,"instance":"pilot","deliveryHash":"a"*64,"workId":row["work"],"currentAttempt":{"id":"attempt-a","number":1},"slots":[{"slotId":"demo/"+row["work"]+"/exr-"+str(i+1),"qualifiedId":"demo/exr-"+str(i+1),"score":score,"points":score*10,"maxPoints":10,"status":"complete"} for i,score in enumerate(scores)],"completion":{"completedRequired":sum(s==1 for s in scores),"requiredCount":3,"atLeast":2,"passed":sum(s==1 for s in scores)>=2}}
+    return {"schemaVersion":2,"source":"per-slot-results-v2","state":"started","assignmentId":row["id"],"version":row["version"],"userUid":uid,"instance":"pilot","courseKey":"demo","workId":row["work"],"currentAttempt":{"id":"attempt-a","number":1},"slots":[{"slotId":"demo/"+row["work"]+"/exr-"+str(i+1),"qualifiedId":"demo/exr-"+str(i+1),"score":score,"points":score*10,"maxPoints":10,"status":"complete"} for i,score in enumerate(scores)],"completion":{"completedRequired":sum(s==1 for s in scores),"requiredCount":3,"atLeast":2,"passed":sum(s==1 for s in scores)>=2}}
 
 @pytest.fixture
 def setup(tmp_path):
@@ -76,7 +76,7 @@ async def test_ags_outbox_retry_idempotent_and_restart(setup):
     assert len(ags.sent)==1 and ags.sent[0][1]["scoreGiven"]==2 and assignments.current(student)["state"]=="completed"
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("field,value",[("userUid","foreign"),("version",3),("deliveryHash","b"*64),("workId","foreign"),("assignmentId","foreign"),("instance","foreign")])
+@pytest.mark.parametrize("field,value",[("userUid","foreign"),("version",3),("courseKey","b"*64),("workId","foreign"),("assignmentId","foreign"),("instance","foreign")])
 async def test_wrong_user_activity_context_version_rejected(setup,field,value):
     _,student,_,assignments,grades,_=setup;row=await assignments.request(student,"exr-essay-a","a")
     evidence=result(row,student["uid"]);evidence[field]=value
@@ -131,14 +131,14 @@ async def test_changed_runtime_activity_cannot_deliver_prior_pending_grade(setup
 @pytest.mark.anyio
 @pytest.mark.parametrize("queued_state",["pending","sending"])
 @pytest.mark.parametrize("change",["delivery","instance"])
-async def test_restart_changed_delivery_or_instance_fences_old_observation_and_outbox(setup,queued_state,change):
+async def test_restart_foreign_course_or_instance_cannot_send_another_grade(setup,queued_state,change):
     store,student,_,assignments,grades,ags=setup
     row=await assignments.request(student,"exr-essay-a","a")
     evidence=result(row,student["uid"]);grades.observe(row,evidence)
     with store.transaction() as db:
         db.execute("UPDATE outbox SET state=?,lease_until=900",(queued_state,))
     upgraded=delivery();instance="pilot"
-    if change=="delivery":upgraded["deliveryHash"]="b"*64
+    if change=="delivery":upgraded["courseId"]="other"
     else:
         instance="other";upgraded["instances"][instance]=upgraded["instances"]["pilot"]
     reopened=Store(store.path)

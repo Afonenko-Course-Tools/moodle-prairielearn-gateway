@@ -194,12 +194,12 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
         if who["role"]!="student":
             if activity.kind not in ("lab","catalog"): raise LaunchError("Native Student enrollment required")
             return RedirectResponse("/pl/",status_code=303)
-        await clients.bridge.enroll(who["uid"],config.instance,delivery["deliveryHash"])
+        await clients.bridge.enroll(who["uid"],config.instance,delivery["courseId"])
         if activity.kind!="catalog": await assignments.reconcile_all()
         target=config.routePrefix + "/"
         if activity.kind=="lab":
             assignments.launch_work(who,activity.workId)
-            target=await clients.bridge.work_launch(who["uid"],config.instance,delivery["deliveryHash"],activity.workId)
+            target=await clients.bridge.work_launch(who["uid"],config.instance,delivery["courseId"],activity.workId)
         return RedirectResponse(target,status_code=303)
 
     def administrator_allowed(who):
@@ -265,7 +265,7 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
         who=session(request,True);work=assignments.launch_work(who,work_id)
         activity=config.registration.activities[who["activity"]]
         if activity.kind=="lab" and activity.workId!=work_id or activity.kind=="defense" and "relatedExercise" not in work or activity.kind=="catalog" and "relatedExercise" in work: raise LaunchError("Launch from the matching Moodle activity")
-        path=await clients.bridge.work_launch(who["uid"],config.instance,delivery["deliveryHash"],work_id)
+        path=await clients.bridge.work_launch(who["uid"],config.instance,delivery["courseId"],work_id)
         token=store.handoff(request.cookies["GatewaySession"],path,int(clock()))
         response=JSONResponse({"url":config.routePrefix + "/pl/"+token})
         response.set_cookie("pl2_pre_auth_url",path,secure=True,httponly=True,samesite="lax",path="/")

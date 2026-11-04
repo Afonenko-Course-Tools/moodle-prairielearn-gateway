@@ -5,7 +5,6 @@ import json
 import re
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .errors import GatewayError
-from .store import native_digest
 from . import delivery_v4
 
 class Closed(BaseModel):
@@ -103,22 +102,23 @@ def _delivery_bindings(delivery,questions):
         if not manual:
             if any(not isinstance(binding[k],str) or not binding[k] for k in ('runtime','projectCheck')) or not isinstance(binding['sources'],list) or not binding['sources']:raise GatewayError('Automatic runtime/source binding required')
             for source in binding['sources']:
-                if not isinstance(source,dict) or set(source)!={'projectRelativePath','submissionRelativePath','sha256'} or not relative(source['projectRelativePath']) or not relative(source['submissionRelativePath']) or not isinstance(source['sha256'],str) or not re.fullmatch(r'[a-f0-9]{64}',source['sha256']):raise GatewayError('Invalid automatic source binding')
+                if not isinstance(source,dict) or set(source)!={'projectRelativePath','submissionRelativePath'} or not relative(source['projectRelativePath']) or not relative(source['submissionRelativePath']):raise GatewayError('Invalid automatic source binding')
 
 def load_delivery(path, instance):
-    root=Path(path).resolve(strict=True)
+    root=Path(path).absolute()
+    if root.resolve(strict=True)!=root or not root.is_dir():raise GatewayError("Real native directory required")
     delivery=json.loads((root/"delivery.json").read_text())
-    required={"schemaVersion","courseId","bookRoot","sourceSnapshotHash","inventoryHash","verificationInventoryHash","questions","gradingPayloads","works","instances","files","deliveryHash"}
-    if not isinstance(delivery,dict) or not required<=delivery.keys() or set(delivery)-required-{"candidate"} or type(delivery["schemaVersion"]) is not int or delivery["schemaVersion"] not in (3,4) or native_digest({k:v for k,v in delivery.items() if k!="deliveryHash"})!=delivery["deliveryHash"]: raise GatewayError("Unsupported native delivery v3/v4 identity/schema")
-    if delivery['schemaVersion']==4:delivery_v4.validate_base(delivery)
+    required={"schemaVersion","courseId","bookRoot","questions","gradingPayloads","works","instances","files"}
+    if not isinstance(delivery,dict) or not required<=delivery.keys() or set(delivery)-required-{"candidate"} or type(delivery["schemaVersion"]) is not int or delivery["schemaVersion"]!=5: raise GatewayError("Expected functional native delivery v5")
+    if delivery['schemaVersion']==5:delivery_v4.validate_base(delivery)
     questions=delivery['questions']
     if not isinstance(questions,list) or not questions or any(not isinstance(q,str) or not re.fullmatch(re.escape(delivery['courseId'])+r'/exr-[a-z0-9][a-z0-9-]*',q) for q in questions) or len(set(questions))!=len(questions): raise GatewayError('Invalid native question catalog')
-    if delivery['schemaVersion']==4:delivery_v4.validate_bindings(delivery,questions,_delivery_bindings)
+    if delivery['schemaVersion']==5:delivery_v4.validate_bindings(delivery,questions,_delivery_bindings)
     else:_delivery_bindings(delivery,questions)
-    for name,sha in delivery["files"].items():
-        if not isinstance(name,str) or name.startswith("/") or any(s in ("",".","..") for s in name.split("/")) or not isinstance(sha,str) or not re.fullmatch("[a-f0-9]{64}",sha): raise GatewayError("Unsafe native delivery inventory")
+    for name in delivery["files"]:
+        if not delivery_v4.relative(name): raise GatewayError("Unsafe selected native path")
         file=root/name
-        if file.resolve(strict=True)!=file.absolute() or not file.is_file() or __import__("hashlib").sha256(file.read_bytes()).hexdigest()!=sha: raise GatewayError("Native delivery file mismatch")
+        if file.resolve(strict=True)!=file.absolute() or not file.is_file(): raise GatewayError("Native regular file required")
     if instance not in delivery["instances"]: raise GatewayError("Instance absent from delivery")
     works={w["id"]:w for w in delivery["works"]}
     if len(works)!=len(delivery["works"]) or any(w not in works for w in delivery["instances"][instance]["works"]): raise GatewayError("Ambiguous selected works")

@@ -32,7 +32,7 @@ class Assignments:
     def _get(self, assignment_id):
         with self.store.connect() as db: row=db.execute("SELECT * FROM assignments WHERE id=? AND instance=?",(assignment_id,self.instance)).fetchone()
         if not row: raise GatewayError("Assignment missing",404)
-        if row["delivery"] != self.delivery["deliveryHash"]: raise GatewayError("Explicit delivery migration required")
+        if row["delivery"] != self.delivery["courseId"]: raise GatewayError("Explicit delivery migration required")
         self._binding(row)
         return dict(row)
 
@@ -49,7 +49,7 @@ class Assignments:
                 if prior["body_hash"] != body_hash: raise GatewayError("Idempotency key conflict")
                 return dict(db.execute("SELECT * FROM assignments WHERE id=?",(prior["assignment_id"],)).fetchone())
             current=db.execute("SELECT * FROM assignments WHERE user_id=? AND instance=?",(session["userId"],self.instance)).fetchone()
-            if current and current["delivery"] != self.delivery["deliveryHash"]: raise GatewayError("Explicit delivery migration required")
+            if current and current["delivery"] != self.delivery["courseId"]: raise GatewayError("Explicit delivery migration required")
             if current and any(current[k]!=session[k] for k in ("context","resource","lineitem")): raise GatewayError("Assignment activity mapping is immutable")
             if current and db.execute("SELECT 1 FROM outbox WHERE assignment_id=? AND state='sending' AND lease_until>?",(current["id"],now)).fetchone():
                 raise GatewayError("Grade delivery in progress; retry replacement")
@@ -68,7 +68,7 @@ class Assignments:
                 db.execute("UPDATE requests SET state='replaced' WHERE assignment_id=? AND state IN ('assigned','approved','completed')",(assignment_id,))
                 db.execute("UPDATE assignments SET version=?,old_work=?,work=?,essay=?,state=?,desired_state=?,context=?,resource=?,lineitem=?,updated=? WHERE id=?",(version,old,work["id"],essay,state,desired,session["context"],session["resource"],session["lineitem"],now,assignment_id))
             else:
-                db.execute("INSERT INTO assignments VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(assignment_id,session["userId"],self.instance,self.delivery["deliveryHash"],version,work["id"],essay,old,state,desired,session["context"],session["resource"],session["lineitem"],now))
+                db.execute("INSERT INTO assignments VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(assignment_id,session["userId"],self.instance,self.delivery["courseId"],version,work["id"],essay,old,state,desired,session["context"],session["resource"],session["lineitem"],now))
             db.execute("INSERT INTO requests VALUES(?,?,?,?,?,?,?,?,?)",(secrets.token_urlsafe(24),assignment_id,session["userId"],key,body_hash,work["id"],essay,state,now))
             self.store.audit(db,"assignment-reserved",assignment_id,{"version":version,"work":work["id"],"state":state},now)
             return dict(db.execute("SELECT * FROM assignments WHERE id=?",(assignment_id,)).fetchone())
@@ -126,7 +126,7 @@ class Assignments:
         row=self._get(assignment_id)
         if row["state"] != "reconciling": return row
         with self.store.connect() as db: uid=db.execute("SELECT uid FROM users WHERE id=?",(row["user_id"],)).fetchone()[0]
-        payload={"version":row["version"],"userUid":uid,"instance":row["instance"],"deliveryHash":row["delivery"],"oldWork":row["old_work"],"newWork":row["work"]}
+        payload={"version":row["version"],"userUid":uid,"instance":row["instance"],"courseKey":row["delivery"],"oldWork":row["old_work"],"newWork":row["work"]}
         answer=await self.bridge.apply(assignment_id,payload)
         expected={"schemaVersion":1,"id":assignment_id,**payload,"reconciled":True}
         if any(answer.get(k)!=v or type(answer.get(k)) is not type(v) for k,v in expected.items()) or type(answer.get("duplicate")) is not bool or set(answer)!=set(expected)|{"duplicate"}: raise GatewayError("Bridge reconciliation evidence mismatch",503)
@@ -145,7 +145,7 @@ class Assignments:
 
     def my_works(self, session):
         current=self.current(session)
-        return [work for work in self.works.values() if session["role"]=="teacher" or "relatedExercise" not in work or current and current["delivery"]==self.delivery["deliveryHash"] and current["state"] in ACTIVE and current["work"]==work["id"]]
+        return [work for work in self.works.values() if session["role"]=="teacher" or "relatedExercise" not in work or current and current["delivery"]==self.delivery["courseId"] and current["state"] in ACTIVE and current["work"]==work["id"]]
 
     def launch_work(self, session, work_id):
         if session["role"]=="teacher": raise GatewayError("Teacher role does not grant native Student/admin access",403)
