@@ -8,8 +8,9 @@ import pytest
 from joserfc import jwt
 from joserfc.jwk import RSAKey
 from gateway.app import create_app
+from gateway.config import Configuration
 from gateway.errors import GatewayError
-from gateway.launch import LTI, INSTRUCTOR
+from gateway.launch import LTI, INSTRUCTOR, LEARNER, LaunchService
 from gateway.pl import PLClient
 from gateway.store import Store, digest
 from test_launch import env, attempt
@@ -175,3 +176,49 @@ def test_email_migration_failure_rolls_back_both_schema_and_rows(version,tmp_pat
         assert len(columns)==9 and columns[6][3]==(1 if version==3 else 0)
         assert db.execute('SELECT uid FROM users').fetchone()==(who['uid'],)
         assert db.execute('SELECT count(*) FROM sessions').fetchone()==(1,)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('role',[LEARNER,INSTRUCTOR])
+@pytest.mark.parametrize('changed_field',[None,'issuer','clientId','deploymentId'])
+async def test_bootstrap_rechecks_saved_signed_session_against_current_registration(tmp_path,role,changed_field):
+    values=login_config(tmp_path)
+    original=Configuration.model_validate(values)
+    store=Store(original.database)
+    registration=original.registration.model_dump()
+    registration['targetLinkUri']=original.publicOrigin+original.routePrefix+'/lti/launch'
+    key=RSAKey.generate_key(parameters={'kid':'synthetic-original-registration'})
+    service=LaunchService(store,registration,clock=lambda:1000,login_only=True)
+    pending=service.begin(registration['issuer'],registration['clientId'],registration['targetLinkUri'],'hint','message','browser')
+    claims={'iss':registration['issuer'],'aud':registration['clientId'],'sub':'previous-signed-person',
+            'iat':990,'exp':1100,'nonce':pending['nonce'],LTI+'deployment_id':registration['deploymentId'],
+            LTI+'context':{'id':registration['contextId']},LTI+'resource_link':{'id':'resource'},
+            LTI+'roles':[role],LTI+'message_type':'LtiResourceLinkRequest',LTI+'version':'1.3.0',
+            LTI+'target_link_uri':registration['targetLinkUri'],'email':'owner@example.invalid'}
+    who=service.verify(pending['state'],'browser',jwt.encode({'alg':'RS256','kid':key.kid},claims,key,algorithms=['RS256']),
+                       {'keys':[key.as_dict(private=False)]})
+    changed=copy.deepcopy(values)
+    if changed_field=='issuer':
+        changed['registration'].update(issuer='https://other-moodle.example',authUrl='https://other-moodle.example/auth',jwksUrl='https://other-moodle.example/certs')
+    elif changed_field is not None:
+        changed['registration'][changed_field]='new-'+changed_field
+    current=Configuration.model_validate(changed)
+    seen=[]
+    class Clients:
+        class Bridge:
+            async def enroll(self,uid,instance,course,**context):
+                seen.append({'uid':uid,'instance':instance,'course':course,**context})
+                return {'path':'/pl/course_instance/42/assessments'}
+        bridge=Bridge()
+    app=create_app(current,store=store,clients=Clients(),clock=lambda:1001)
+    token,target=store.bootstrap_handoff(who['token'],False,1000)
+    store.consume_handoff(token,1000)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url='https://course.example') as browser:
+        browser.cookies.set('GatewaySession',who['token'],domain='course.example',path=original.routePrefix)
+        response=await browser.get(target)
+    if changed_field is not None:
+        assert response.status_code==403 and seen==[]
+    else:
+        assert response.status_code==303 and response.headers['location']=='/pl/course_instance/42/assessments'
+        assert seen==[{'uid':who['uid'],'instance':'pilot','course':'demo','role':'teacher' if role==INSTRUCTOR else 'student','email':'owner@example.invalid'}]
+    assert store.session(who['token'],1001)['client']==registration['clientId']

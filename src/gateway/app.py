@@ -199,7 +199,7 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
         if login_only and token is None: raise GatewayError("One-use bootstrap required",404)
         who=store.consume_bootstrap(token,request.cookies.get("GatewaySession",""),False,int(clock())) if token else session(request)
         if login_only:
-            if who["context"] != registration["contextId"] or who["activity"] not in registration["activities"] or who["resource"] != registration["activities"][who["activity"]]["resourceLinkId"]: raise LaunchError("Registered course session required")
+            if any(who[key] != registration[field] for key,field in (("issuer","issuer"),("client","clientId"),("deployment","deploymentId"))) or who["context"] != registration["contextId"] or who["activity"] not in registration["activities"] or who["resource"] != registration["activities"][who["activity"]]["resourceLinkId"]: raise LaunchError("Registered course session required")
             answer=await clients.bridge.enroll(who["uid"],config.instance,config.courseKey,role=who["role"],email=who["email"])
             return RedirectResponse(answer["path"],status_code=303)
         activity=config.registration.activities[who["activity"]]
