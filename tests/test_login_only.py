@@ -19,6 +19,7 @@ from test_config import example
 from test_assignment import person, Bridge, delivery
 from gateway.assignments import Assignments
 from test_launch import env, attempt
+from legacy_store import legacy_schema, legacy_person
 
 
 def login_config(tmp_path):
@@ -95,8 +96,8 @@ async def test_signed_login_keeps_uid_and_uses_oneuse_native_bootstrap_without_g
     calls=[]
     class Clients:
         class Bridge:
-            async def enroll(self,uid,instance,delivery):
-                calls.append((uid,instance,delivery))
+            async def enroll(self,uid,instance,delivery,*,role,email):
+                calls.append((uid,instance,delivery,role,email))
                 return {'path':'/pl/course_instance/42/assessments'}
         bridge=Bridge()
         async def jwks(self):return {'keys':[key.as_dict(private=False)]}
@@ -131,7 +132,7 @@ async def test_signed_login_keeps_uid_and_uses_oneuse_native_bootstrap_without_g
             for path in ('/my/works','/teacher/roster','/administrator-bootstrap','/bootstrap'):
                 assert (await client.get(prefix+path)).status_code==404
             assert (await client.post(prefix+'/launch/administrator',json={})).status_code==404
-            assert calls==[(expected,'pilot','demo')]
+            assert calls==[(expected,'pilot','demo','teacher' if role == INSTRUCTOR else 'student',None)]
     with app.state.store.connect() as db:
         for table in ('activity_bindings','assignments','requests','observations','outbox'):
             assert db.execute('SELECT count(*) FROM '+table).fetchone()[0]==0
@@ -139,10 +140,10 @@ async def test_signed_login_keeps_uid_and_uses_oneuse_native_bootstrap_without_g
 
 def test_migration_v3_preserves_all_old_rows_and_allows_explicit_login_without_binding(tmp_path):
     path=tmp_path/'legacy.sqlite'
-    schema=Path('schema/runtime.sql').read_text().replace('VALUES(4)','VALUES(3)').replace('lineitem TEXT,','lineitem TEXT NOT NULL,')
+    schema=legacy_schema(3)
     with sqlite3.connect(path) as db:db.executescript(schema)
     old=object.__new__(Store);old.path=path;old.gateway_prefix="/gateway"
-    who=person(old)
+    who=legacy_person(old)
     handoff=old.handoff(who['token'],'/gateway/bootstrap',1000)
     state=old.state('browser2',1000)
     assignment=asyncio.run(Assignments(old,Bridge(),delivery(),'pilot',{'mode':'immediate','capacity':{}},clock=lambda:1000).request(who,'exr-essay-a','old-request'))
@@ -155,8 +156,11 @@ def test_migration_v3_preserves_all_old_rows_and_allows_explicit_login_without_b
     reopened=Store(path)
     assert reopened.session(who['token'],1001)['uid']==who['uid']
     with reopened.connect() as db:
-        assert [r[0] for r in db.execute('SELECT version FROM schema_versions')]==[4]
-        for t,rows in before.items():assert [tuple(r) for r in db.execute('SELECT * FROM '+t)]==rows
+        assert [r[0] for r in db.execute('SELECT version FROM schema_versions')]==[5]
+        for t,rows in before.items():
+            actual=[tuple(r) for r in db.execute('SELECT * FROM '+t)]
+            if t=='sessions': assert [r[:-1] for r in actual]==rows and all(r[-1] is None for r in actual)
+            else: assert actual==rows
         assert db.execute('PRAGMA foreign_key_check').fetchall()==[]
     identity={**who,'activity':'catalog','lineitem':None}
     new=reopened.activate(state['state'],'browser2',1000,identity,login_only=True)
@@ -204,10 +208,10 @@ def test_login_only_uses_previous_uid_for_both_roles_and_restart(env):
     assert Store(env[0].path).session(second['token'],1001)['uid']==original['uid']
 
 
-@pytest.mark.parametrize('version',[2,1001,5])
+@pytest.mark.parametrize('version',[2,1001,6])
 def test_unrecognized_database_version_is_rejected_without_write(tmp_path,version):
     path=tmp_path/'unsupported.sqlite'
-    with sqlite3.connect(path) as db:db.executescript(Path('schema/runtime.sql').read_text().replace('VALUES(4)',f'VALUES({version})'))
+    with sqlite3.connect(path) as db:db.executescript(Path('schema/runtime.sql').read_text().replace('VALUES(5)',f'VALUES({version})'))
     before=path.read_bytes()
     with pytest.raises(GatewayError):Store(path)
     assert path.read_bytes()==before
@@ -217,9 +221,9 @@ def test_v3_migration_failure_rolls_back_schema_rows_and_version(tmp_path,monkey
     import gateway.store as module
     path=tmp_path/'rollback.sqlite'
     with sqlite3.connect(path) as db:
-        db.executescript(Path('schema/runtime.sql').read_text().replace('VALUES(4)','VALUES(3)').replace('lineitem TEXT,','lineitem TEXT NOT NULL,'))
+        db.executescript(legacy_schema(3))
     old=object.__new__(Store);old.path=path;old.gateway_prefix='/gateway'
-    who=person(old)
+    who=legacy_person(old)
     original=sqlite3.connect
     class Connection(sqlite3.Connection):
         def execute(self,sql,*args):

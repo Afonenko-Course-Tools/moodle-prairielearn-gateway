@@ -48,22 +48,25 @@ class Store:
                     with sqlite3.connect(self.path.as_uri()+'?mode=ro',uri=True) as check:
                         versions=[row[0] for row in check.execute('SELECT version FROM schema_versions')]
                         session_columns=list(check.execute('PRAGMA table_info(sessions)'))
-                        if [row[1] for row in session_columns] != ['token_hash','user_id','role','context','resource','activity','lineitem','expires','csrf'] or versions in ([3],[4]) and session_columns[6][3] != (1 if versions == [3] else 0): raise GatewayError('Unsupported Gateway session schema')
-                        if versions not in ([3],[4]) or [row[1] for row in check.execute('PRAGMA table_info(native_attempts)')]!=['scope','version','instance','delivery','work','attempt_id','attempt_number','selection']:raise GatewayError('Unsupported Gateway database schema')
+                        expected_sessions=['token_hash','user_id','role','context','resource','activity','lineitem','expires','csrf'] + (['email'] if versions == [5] else [])
+                        if [row[1] for row in session_columns] != expected_sessions or versions in ([3],[4],[5]) and session_columns[6][3] != (1 if versions == [3] else 0) or versions == [5] and session_columns[9][3] != 0: raise GatewayError('Unsupported Gateway session schema')
+                        if versions not in ([3],[4],[5]) or [row[1] for row in check.execute('PRAGMA table_info(native_attempts)')]!=['scope','version','instance','delivery','work','attempt_id','attempt_number','selection']:raise GatewayError('Unsupported Gateway database schema')
                 except sqlite3.DatabaseError as error:raise GatewayError('Unsupported Gateway database schema') from error
             with self.connect() as db:
                 self._enable_wal(db)
-                if existing and versions == [3]:
-                    # Preserve every legacy/security row; only session binding becomes optional.
+                if existing and versions in ([3],[4]):
+                    # Preserve legacy/security rows; email belongs to the original session.
                     db.execute("PRAGMA foreign_keys=OFF")
                     try:
                         db.execute("BEGIN IMMEDIATE")
-                        db.execute("CREATE TABLE sessions_v4(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), role TEXT NOT NULL CHECK(role IN ('student','teacher')), context TEXT NOT NULL, resource TEXT NOT NULL, activity TEXT NOT NULL, lineitem TEXT, expires INTEGER NOT NULL, csrf TEXT NOT NULL)")
-                        db.execute("INSERT INTO sessions_v4 SELECT token_hash,user_id,role,context,resource,activity,lineitem,expires,csrf FROM sessions")
-                        db.execute("DROP TABLE sessions")
-                        db.execute("ALTER TABLE sessions_v4 RENAME TO sessions")
+                        if versions == [3]:
+                            db.execute("CREATE TABLE sessions_v4(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), role TEXT NOT NULL CHECK(role IN ('student','teacher')), context TEXT NOT NULL, resource TEXT NOT NULL, activity TEXT NOT NULL, lineitem TEXT, expires INTEGER NOT NULL, csrf TEXT NOT NULL)")
+                            db.execute("INSERT INTO sessions_v4 SELECT token_hash,user_id,role,context,resource,activity,lineitem,expires,csrf FROM sessions")
+                            db.execute("DROP TABLE sessions")
+                            db.execute("ALTER TABLE sessions_v4 RENAME TO sessions")
+                        db.execute("ALTER TABLE sessions ADD COLUMN email TEXT")
                         if db.execute("PRAGMA foreign_key_check").fetchone(): raise GatewayError("Gateway migration foreign key check rejected")
-                        db.execute("UPDATE schema_versions SET version=4 WHERE version=3")
+                        db.execute("UPDATE schema_versions SET version=5 WHERE version IN (3,4)")
                         db.commit()
                     except BaseException:
                         db.rollback()
@@ -117,7 +120,7 @@ class Store:
             updated = db.execute("UPDATE login_states SET consumed=1 WHERE token_hash=? AND binding=? AND expires>? AND consumed=0", (digest(state), digest(binding), now)).rowcount
             if updated != 1: raise LaunchError("Launch replay rejected")
             db.execute("INSERT INTO users(id,issuer,client,deployment,subject,uid,name) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name", tuple(identity[k] for k in ("userId","issuer","client","deployment","subject","uid","name")))
-            db.execute("INSERT INTO sessions VALUES(?,?,?,?,?,?,?,?,?)", (digest(token), identity["userId"], identity["role"], identity["context"], identity["resource"], identity["activity"], None if login_only else identity["lineitem"], now+3600, csrf))
+            db.execute("INSERT INTO sessions(token_hash,user_id,role,context,resource,activity,lineitem,expires,csrf,email) VALUES(?,?,?,?,?,?,?,?,?,?)", (digest(token), identity["userId"], identity["role"], identity["context"], identity["resource"], identity["activity"], None if login_only else identity["lineitem"], now+3600, csrf, identity.get("email")))
             if identity["role"]=="student" and not login_only:
                 db.execute("INSERT INTO activity_bindings VALUES(?,?,?,?,?) ON CONFLICT(user_id,activity) DO UPDATE SET context=excluded.context,resource=excluded.resource,lineitem=excluded.lineitem",(identity["userId"],identity["activity"],identity["context"],identity["resource"],identity["lineitem"]))
         return {**identity, "token": token, "csrf": csrf}

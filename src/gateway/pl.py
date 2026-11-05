@@ -1,6 +1,7 @@
 from urllib.parse import quote
 import httpx
 from .errors import GatewayError
+from .launch import normalize_email
 
 class PLClient:
     def __init__(self,http,url,token):
@@ -31,10 +32,14 @@ class PLClient:
         if set(answer)!=set(expected) or any(answer[k]!=v or type(answer[k]) is not type(v) for k,v in expected.items()): raise GatewayError("Native administrator evidence mismatch",503)
         return answer
 
-    async def enroll(self,uid,instance,delivery):
+    async def enroll(self,uid,instance,delivery,*,role=None,email=None):
         payload={"userUid":uid,"instance":instance,"courseKey":delivery}
-        answer=await self._call("PUT","/internal/gateway/enrollment",json=payload)
         expected={"schemaVersion":1,**payload,"enrolled":True}
+        if role is not None:
+            if role not in ("student","teacher") or email is not None and (not isinstance(email,str) or normalize_email(email) != email): raise GatewayError("Invalid trusted enrollment role/email",503)
+            payload.update(role=role,email=email)
+        elif email is not None: raise GatewayError("Trusted enrollment role required",503)
+        answer=await self._call("PUT","/internal/gateway/enrollment",json=payload)
         if set(answer)!=set(expected)|{"path"} or any(answer[k]!=v or type(answer[k]) is not type(v) for k,v in expected.items()) or not isinstance(answer["path"],str) or not __import__("re").fullmatch(r"/pl/course_instance/[1-9][0-9]*/assessments",answer["path"]): raise GatewayError("Native enrollment evidence mismatch",503)
         return answer
 

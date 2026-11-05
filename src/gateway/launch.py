@@ -1,4 +1,5 @@
 import time
+import re
 from joserfc import jwt
 from joserfc.jwk import KeySet
 from .errors import LaunchError
@@ -9,6 +10,28 @@ LEARNER = "http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"
 INSTRUCTOR = "http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"
 AGS = "https://purl.imsglobal.org/spec/lti-ags/claim/endpoint"
 SCORE_SCOPE = "https://purl.imsglobal.org/spec/lti-ags/scope/score"
+
+def normalize_email(value):
+    """Консервативный ASCII mailbox; адрес не является identity или правилом выдачи прав."""
+    if not isinstance(value, str) or any(ord(c) < 32 or ord(c) > 126 for c in value):
+        return None
+    email = value.strip(' ').lower()
+    if not 3 <= len(email) <= 254 or email.count('@') != 1:
+        return None
+    local, domain = email.split('@')
+    if not 1 <= len(local) <= 64 or local.startswith('.') or local.endswith('.') or '..' in local or not re.fullmatch(r"[a-z0-9!#$%&'*+/=?^_`{|}~.\-]+", local):
+        return None
+    labels = domain.split('.')
+    if len(labels) < 2 or any(not 1 <= len(label) <= 63 or not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]*[a-z0-9])?', label) for label in labels):
+        return None
+    return email
+
+
+def verified_email(claims):
+    if 'email_verified' in claims and claims['email_verified'] is not True:
+        return None
+    return normalize_email(claims.get('email'))
+
 
 class LaunchClaimsRegistry(jwt.JWTClaimsRegistry):
     def validate_iat(self,value):
@@ -73,7 +96,7 @@ class LaunchService:
             identity_key = digest([r["issuer"],r["clientId"],r["deploymentId"],sub])
             name = c.get("name", "Moodle participant")
             if not isinstance(name,str) or len(name)>256 or any(ord(v)<32 for v in name): name="Moodle participant"
-            identity = {"userId":identity_key,"uid":"gw-"+identity_key+"@example.invalid","issuer":r["issuer"],"client":r["clientId"],"deployment":r["deploymentId"],"subject":sub,"name":name,"role":"teacher" if INSTRUCTOR in roles else "student","context":r["contextId"],"resource":resource,"activity":activity,"lineitem":None if self.login_only else settings["lineitem"]}
+            identity = {"userId":identity_key,"uid":"gw-"+identity_key+"@example.invalid","issuer":r["issuer"],"client":r["clientId"],"deployment":r["deploymentId"],"subject":sub,"name":name,"role":"teacher" if INSTRUCTOR in roles else "student","context":r["contextId"],"resource":resource,"activity":activity,"lineitem":None if self.login_only else settings["lineitem"],"email":verified_email(c)}
         except LaunchError: raise
         except Exception as error: raise LaunchError("Signature/claims rejected") from error
         return self.store.activate(state, binding, now, identity, login_only=self.login_only)

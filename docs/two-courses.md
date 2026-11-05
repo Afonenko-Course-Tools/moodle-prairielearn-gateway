@@ -19,7 +19,7 @@ Cookie `GatewaySession` ограничен этим path; session, assignment, o
 и путём `/gateway/courses/<id>`. Вложенная запись не содержит `schemaVersion`.
 Путь `/gateway/lti/login` служит общим OIDC endpoint; отдельный однокурсовый
 профиль через `/gateway` не поддерживается. Прежняя Configuration v1
-отклоняется. SQLite версии 3 автоматически мигрирует в версию 4 с сохранением строк.
+отклоняется. SQLite версий 3/4 автоматически мигрирует в версию 5 с сохранением строк.
 Неизвестные схемы отклоняются. Переход в `login-only` сохраняет ту же БД,
 UID и историю; подробности — [в договоре входа](login-only.md).
 Ниже описаны также сохранённые возможности режима `grading`; его flow,
@@ -58,6 +58,14 @@ Java может иметь defense и lab элементы; System-Practice пи
 доверия HTTPS и подготовки этих bindings оператором. Приёмка с локальным mock не подтверждает настройки Moodle учреждения; их проверяют отдельно на фактической регистрации.
 
 ## Автоматическое зачисление и преподаватель
+
+В `login-only` Gateway передаёт приватному Bridge только role/email из
+проверенной исходной LTI session. Native права владельца и преподавателей
+определяет Bridge; `ownerEmail` отсутствует в Gateway конфигурации.
+Отсутствующий или недоверенный email не даёт повышения по адресу владельца. Вход
+преподавателя и студента использует тот же прежний UID и штатный список курса.
+Дальнейшее описание `administratorSubject` относится только к сохранённому
+режиму `grading`, а не к новой приватной политике login-only enrollment.
 
 Первый проверенный Student launch создаёт постоянную запись пользователя
 в SQLite выбранного профиля и обеспечивает native Student enrollment в его
@@ -106,14 +114,14 @@ identity. Подготовка новой immutable delivery одного кур
 Замена delivery **в том же instance** несовместима с его существующими
 назначениями: Gateway требует explicit delivery migration и не переписывает
 их автоматически. Если вместо согласованной миграции выбирается изолированное
-новое состояние, нужна свежая SQLite schema4. Такая замена БД перестаёт
+новое состояние, нужна свежая SQLite schema5. Такая замена БД перестаёт
 распознавать прежние `GatewaySession`: сохранение signing key не сохраняет
 session bearer, и потребуется новый подписанный Moodle launch.
 
 Для нового semester можно подготовить **новый native course и отдельный
 instance**, например `2026-2027-s1`, затем переключить существующий профиль на
 его verified delivery и согласованную native bridge binding. Сохраняются
-существующая SQLite schema4, routePrefix, HTTPS origin, LTI registration и
+существующая SQLite schema5, routePrefix, HTTPS origin, LTI registration и
 activity bindings, signing/handoff/bridge keys, tokens и TLS certificates.
 Неистёкшие `GatewaySession` и CSRF продолжают распознаваться в той же БД и
 cookie path; обычный TTL и одноразовость handoff/state остаются прежними.
