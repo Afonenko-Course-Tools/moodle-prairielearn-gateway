@@ -52,7 +52,7 @@ class Clients:
         self.key=RSAKey.import_key(json.loads(Path(config.privateKeyFile).read_text()))
         if not self.key.kid or "d" not in self.key.as_dict(private=True): raise ValueError("Private RS256 key with kid required")
         self.bridge=PLClient(self.http,config.bridge.url,secret(config.bridge.tokenFile))
-        self.ags=AGSClient(self.http,self.registration,self.key)
+        self.ags=AGSClient(self.http,self.registration,self.key) if config.mode == "grading" else None
 
     async def jwks(self):
         try:
@@ -81,19 +81,21 @@ load().catch(e=>status.textContent=e.message);
 
 def create_app(config, *, store=None, delivery=None, clients=None, clock=time.time, start_worker=True):
     if not isinstance(config,Configuration): config=Configuration.model_validate(config)
-    delivery=delivery or load_delivery(config.deliveryPath,config.instance)
+    login_only=config.mode == "login-only"
+    if not login_only: delivery=delivery or load_delivery(config.deliveryPath,config.instance)
     store=store or Store(config.database)
     store.gateway_prefix=config.routePrefix
     own_clients=clients is None
     clients=clients or Clients(config)
     registration=config.registration.model_dump()
     registration["targetLinkUri"]=config.publicOrigin.rstrip("/")+config.routePrefix + "/lti/launch"
-    launch=LaunchService(store,registration,clock)
-    defense=next((v for v in config.registration.activities.values() if v.kind=="defense"),next((v for v in config.registration.activities.values() if v.kind!="catalog"),None))
-    flow={**config.flow.model_dump(),"contextId":registration["contextId"],"resourceLinkId":defense.resourceLinkId if defense else None,"lineitem":defense.lineitem if defense else None}
-    assignments=Assignments(store,clients.bridge,delivery,config.instance,flow,clock)
-    grades=Grades(store,assignments,clients.ags,clock,activities={k:v.model_dump() for k,v in config.registration.activities.items()})
-
+    launch=LaunchService(store,registration,clock,login_only=login_only)
+    assignments=grades=defense=None
+    if not login_only:
+        defense=next((v for v in config.registration.activities.values() if v.kind=="defense"),next((v for v in config.registration.activities.values() if v.kind!="catalog"),None))
+        flow={**config.flow.model_dump(),"contextId":registration["contextId"],"resourceLinkId":defense.resourceLinkId if defense else None,"lineitem":defense.lineitem if defense else None}
+        assignments=Assignments(store,clients.bridge,delivery,config.instance,flow,clock)
+        grades=Grades(store,assignments,clients.ags,clock,activities={k:v.model_dump() for k,v in config.registration.activities.items()})
     async def worker():
         while True:
             try:
@@ -105,7 +107,7 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
 
     @asynccontextmanager
     async def lifespan(app):
-        task=asyncio.create_task(worker()) if start_worker else None
+        task=asyncio.create_task(worker()) if start_worker and not login_only else None
         try: yield
         finally:
             if task:
@@ -155,9 +157,9 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
         if set(params)!={"state","id_token"}: raise LaunchError("Launch fields rejected")
         value=launch.verify(params["state"],request.cookies.get("GatewayBinding",""),params["id_token"],await clients.jwks())
         activity=config.registration.activities[value["activity"]]
-        if value["role"]=="student" or activity.kind in ("lab","catalog"):
+        if login_only or value["role"]=="student" or activity.kind in ("lab","catalog"):
             target=config.routePrefix + ("/administrator-bootstrap" if administrator_allowed(value) else "/bootstrap")
-            if activity.kind in ("lab","catalog"):
+            if login_only or activity.kind in ("lab","catalog"):
                 token,target=store.bootstrap_handoff(value["token"],administrator_allowed(value),int(clock()))
             else: token=store.handoff(value["token"],target,int(clock()))
             response=RedirectResponse(config.routePrefix + "/pl/"+token,status_code=303)
@@ -184,12 +186,22 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
     @app.get(config.routePrefix + "/")
     async def home(request:Request):
         session(request)
+        if login_only:
+            token,target=store.bootstrap_handoff(request.cookies["GatewaySession"],False,int(clock()))
+            response=RedirectResponse(config.routePrefix + "/pl/"+token,status_code=303)
+            response.set_cookie("pl2_pre_auth_url",target,secure=True,httponly=True,samesite="lax",path="/")
+            return response
         return HTMLResponse(PAGE.replace("/gateway",config.routePrefix))
 
     @app.get(config.routePrefix + "/bootstrap/{token}")
     @app.get(config.routePrefix + "/bootstrap")
     async def bootstrap(request:Request,token:str|None=None):
+        if login_only and token is None: raise GatewayError("One-use bootstrap required",404)
         who=store.consume_bootstrap(token,request.cookies.get("GatewaySession",""),False,int(clock())) if token else session(request)
+        if login_only:
+            if who["context"] != registration["contextId"] or who["activity"] not in registration["activities"] or who["resource"] != registration["activities"][who["activity"]]["resourceLinkId"]: raise LaunchError("Registered course session required")
+            answer=await clients.bridge.enroll(who["uid"],config.instance,config.courseKey)
+            return RedirectResponse(answer["path"],status_code=303)
         activity=config.registration.activities[who["activity"]]
         if who["role"]!="student":
             if activity.kind not in ("lab","catalog"): raise LaunchError("Native Student enrollment required")
@@ -203,12 +215,14 @@ def create_app(config, *, store=None, delivery=None, clients=None, clock=time.ti
         return RedirectResponse(target,status_code=303)
 
     def administrator_allowed(who):
-        return bool(config.administratorSubject) and who["role"]=="teacher" and all(who[key]==value for key,value in (("issuer",registration["issuer"]),("client",registration["clientId"]),("deployment",registration["deploymentId"]),("subject",config.administratorSubject)))
+        return not login_only and bool(config.administratorSubject) and who["role"]=="teacher" and all(who[key]==value for key,value in (("issuer",registration["issuer"]),("client",registration["clientId"]),("deployment",registration["deploymentId"]),("subject",config.administratorSubject)))
 
     def administrator_session(request,write=False):
         who=session(request,write)
         if not administrator_allowed(who): raise LaunchError("Explicit administrator identity required")
         return who
+
+    if login_only: return app
 
     @app.post(config.routePrefix + "/launch/administrator")
     async def launch_administrator(body:Empty,request:Request):

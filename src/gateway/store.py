@@ -47,10 +47,28 @@ class Store:
                 try:
                     with sqlite3.connect(self.path.as_uri()+'?mode=ro',uri=True) as check:
                         versions=[row[0] for row in check.execute('SELECT version FROM schema_versions')]
-                        if versions!=[3] or [row[1] for row in check.execute('PRAGMA table_info(native_attempts)')]!=['scope','version','instance','delivery','work','attempt_id','attempt_number','selection']:raise GatewayError('Unsupported Gateway database schema; create a fresh v3 database')
+                        session_columns=list(check.execute('PRAGMA table_info(sessions)'))
+                        if [row[1] for row in session_columns] != ['token_hash','user_id','role','context','resource','activity','lineitem','expires','csrf'] or versions in ([3],[4]) and session_columns[6][3] != (1 if versions == [3] else 0): raise GatewayError('Unsupported Gateway session schema')
+                        if versions not in ([3],[4]) or [row[1] for row in check.execute('PRAGMA table_info(native_attempts)')]!=['scope','version','instance','delivery','work','attempt_id','attempt_number','selection']:raise GatewayError('Unsupported Gateway database schema')
                 except sqlite3.DatabaseError as error:raise GatewayError('Unsupported Gateway database schema') from error
             with self.connect() as db:
                 self._enable_wal(db)
+                if existing and versions == [3]:
+                    # Preserve every legacy/security row; only session binding becomes optional.
+                    db.execute("PRAGMA foreign_keys=OFF")
+                    try:
+                        db.execute("BEGIN IMMEDIATE")
+                        db.execute("CREATE TABLE sessions_v4(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), role TEXT NOT NULL CHECK(role IN ('student','teacher')), context TEXT NOT NULL, resource TEXT NOT NULL, activity TEXT NOT NULL, lineitem TEXT, expires INTEGER NOT NULL, csrf TEXT NOT NULL)")
+                        db.execute("INSERT INTO sessions_v4 SELECT token_hash,user_id,role,context,resource,activity,lineitem,expires,csrf FROM sessions")
+                        db.execute("DROP TABLE sessions")
+                        db.execute("ALTER TABLE sessions_v4 RENAME TO sessions")
+                        if db.execute("PRAGMA foreign_key_check").fetchone(): raise GatewayError("Gateway migration foreign key check rejected")
+                        db.execute("UPDATE schema_versions SET version=4 WHERE version=3")
+                        db.commit()
+                    except BaseException:
+                        db.rollback()
+                        raise
+                    finally: db.execute("PRAGMA foreign_keys=ON")
                 if not existing:
                     schema=Path(__file__).resolve().parents[2]/'schema/runtime.sql'
                     if not schema.exists():schema=Path(__import__('sys').prefix)/'share/moodle-prairielearn-gateway/schema/runtime.sql'
@@ -91,14 +109,16 @@ class Store:
             raise LaunchError("State binding/TTL/replay rejected")
         return dict(row)
 
-    def activate(self, state, binding, now, identity):
+    def activate(self, state, binding, now, identity, *, login_only=False):
+        if not login_only and not identity.get("lineitem"):
+            raise LaunchError("AGS activity binding required")
         token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         with self.transaction() as db:
             updated = db.execute("UPDATE login_states SET consumed=1 WHERE token_hash=? AND binding=? AND expires>? AND consumed=0", (digest(state), digest(binding), now)).rowcount
             if updated != 1: raise LaunchError("Launch replay rejected")
             db.execute("INSERT INTO users(id,issuer,client,deployment,subject,uid,name) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name", tuple(identity[k] for k in ("userId","issuer","client","deployment","subject","uid","name")))
-            db.execute("INSERT INTO sessions VALUES(?,?,?,?,?,?,?,?,?)", (digest(token), identity["userId"], identity["role"], identity["context"], identity["resource"], identity["activity"], identity["lineitem"], now+3600, csrf))
-            if identity["role"]=="student":
+            db.execute("INSERT INTO sessions VALUES(?,?,?,?,?,?,?,?,?)", (digest(token), identity["userId"], identity["role"], identity["context"], identity["resource"], identity["activity"], None if login_only else identity["lineitem"], now+3600, csrf))
+            if identity["role"]=="student" and not login_only:
                 db.execute("INSERT INTO activity_bindings VALUES(?,?,?,?,?) ON CONFLICT(user_id,activity) DO UPDATE SET context=excluded.context,resource=excluded.resource,lineitem=excluded.lineitem",(identity["userId"],identity["activity"],identity["context"],identity["resource"],identity["lineitem"]))
         return {**identity, "token": token, "csrf": csrf}
 

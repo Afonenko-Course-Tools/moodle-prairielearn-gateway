@@ -45,7 +45,7 @@ administrator bootstrap определяется точной verified identity 
 Другая delivery и прежние данные не переключаются автоматически.
 
 Новый instance в том же профиле использует отдельный scope назначений и
-результатов. При сохранении schema3 SQLite, routePrefix и LTI bindings
+результатов. При сохранении schema4 SQLite, routePrefix и LTI bindings
 неистёкшие session tokens и CSRF сохраняются; native bootstrap использует
 новый instance/delivery. Назначения, audit и native attempts старого instance
 не переносятся и не изменяются. Это не отменяет запрет несовместимой замены

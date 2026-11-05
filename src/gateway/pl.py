@@ -35,7 +35,7 @@ class PLClient:
         payload={"userUid":uid,"instance":instance,"courseKey":delivery}
         answer=await self._call("PUT","/internal/gateway/enrollment",json=payload)
         expected={"schemaVersion":1,**payload,"enrolled":True}
-        if set(answer)!=set(expected) or any(answer[k]!=v or type(answer[k]) is not type(v) for k,v in expected.items()): raise GatewayError("Native enrollment evidence mismatch",503)
+        if set(answer)!=set(expected)|{"path"} or any(answer[k]!=v or type(answer[k]) is not type(v) for k,v in expected.items()) or not isinstance(answer["path"],str) or not __import__("re").fullmatch(r"/pl/course_instance/[1-9][0-9]*/assessments",answer["path"]): raise GatewayError("Native enrollment evidence mismatch",503)
         return answer
 
     async def work_launch(self,uid,instance,delivery,work):

@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 2,
+  "courses": {
+    "java": {
+      "publicOrigin": "https://course.example",
+      "database": "/var/lib/gateway/java.sqlite",
+      "privateKeyFile": "/run/secrets/gateway-private-key.json",
+      "handoffTokenFile": "/run/secrets/gateway-handoff-token",
+      "caFile": "/run/tls/ca.crt",
+      "bridge": {
+        "url": "http://prairielearn:3001",
+        "tokenFile": "/run/secrets/platform-bridge-token"
+      },
+      "deliveryPath": "/native/java/EXACT_DELIVERY_HASH",
+      "instance": "pilot",
+      "pollSeconds": 15,
+      "registration": {
+        "issuer": "https://moodle.example",
+        "clientId": "registered-client-id",
+        "deploymentId": "registered-deployment-id",
+        "contextId": "registered-course-context",
+        "authUrl": "https://moodle.example/mod/lti/auth.php",
+        "jwksUrl": "https://moodle.example/mod/lti/certs.php",
+        "privateJwksUrl": null,
+        "tokenUrl": "https://moodle.example/mod/lti/token.php",
+        "activities": {
+          "defense": {
+            "kind": "defense",
+            "resourceLinkId": "registered-defense-resource",
+            "lineitem": "https://moodle.example/mod/lti/services.php/lineitems/registered-defense/lineitem",
+            "workId": null
+          },
+          "numbers": {
+            "kind": "lab",
+            "resourceLinkId": "registered-lab-resource",
+            "lineitem": "https://moodle.example/mod/lti/services.php/lineitems/registered-lab/lineitem",
+            "workId": "sec-lab-numbers"
+          }
+        }
+      },
+      "flow": {
+        "mode": "immediate",
+        "capacity": {}
+      },
+      "administratorSubject": null,
+      "routePrefix": "/gateway/courses/java"
+    },
+    "system-practice": {
+      "publicOrigin": "https://course.example",
+      "database": "/var/lib/gateway/system-practice.sqlite",
+      "privateKeyFile": "/run/secrets/gateway-private-key.json",
+      "handoffTokenFile": "/run/secrets/gateway-handoff-token",
+      "caFile": "/run/tls/ca.crt",
+      "bridge": {
+        "url": "http://prairielearn:3001",
+        "tokenFile": "/run/secrets/platform-bridge-token"
+      },
+      "deliveryPath": "/native/system-practice/EXACT_DELIVERY_HASH",
+      "instance": "pilot",
+      "pollSeconds": 15,
+      "registration": {
+        "issuer": "https://moodle.example",
+        "clientId": "registered-client-id",
+        "deploymentId": "registered-deployment-id",
+        "contextId": "registered-course-context",
+        "authUrl": "https://moodle.example/mod/lti/auth.php",
+        "jwksUrl": "https://moodle.example/mod/lti/certs.php",
+        "privateJwksUrl": null,
+        "tokenUrl": "https://moodle.example/mod/lti/token.php",
+        "activities": {
+          "streams": {
+            "kind": "lab",
+            "resourceLinkId": "registered-system-streams-resource",
+            "lineitem": "https://moodle.example/mod/lti/services.php/lineitems/registered-system-streams/lineitem",
+            "workId": "sec-pl-streams-pilot"
+          }
+        }
+      },
+      "flow": {
+        "mode": "immediate",
+        "capacity": {}
+      },
+      "administratorSubject": null,
+      "routePrefix": "/gateway/courses/system-practice"
+    }
+  }
+}

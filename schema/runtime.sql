@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS schema_versions(version INTEGER PRIMARY KEY);
-INSERT OR IGNORE INTO schema_versions VALUES(3);
+INSERT OR IGNORE INTO schema_versions VALUES(4);
 CREATE TABLE IF NOT EXISTS login_states(
  token_hash TEXT PRIMARY KEY, nonce TEXT NOT NULL, binding TEXT NOT NULL,
  expires INTEGER NOT NULL, consumed INTEGER NOT NULL DEFAULT 0
@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS users(
 CREATE TABLE IF NOT EXISTS sessions(
  token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
  role TEXT NOT NULL CHECK(role IN ('student','teacher')), context TEXT NOT NULL,
- resource TEXT NOT NULL, activity TEXT NOT NULL, lineitem TEXT NOT NULL,
+ resource TEXT NOT NULL, activity TEXT NOT NULL, lineitem TEXT,
  expires INTEGER NOT NULL, csrf TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS handoffs(

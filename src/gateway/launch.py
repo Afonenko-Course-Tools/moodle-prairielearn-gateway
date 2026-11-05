@@ -33,8 +33,9 @@ def platform_key_set(jwks):
 
 
 class LaunchService:
-    def __init__(self, store, registration, clock=time.time):
+    def __init__(self, store, registration, clock=time.time, *, login_only=False):
         self.store, self.registration, self.clock = store, registration, clock
+        self.login_only = login_only
 
     def begin(self, issuer, client, target, hint, message, binding):
         r = self.registration
@@ -64,14 +65,15 @@ class LaunchService:
             activity, settings = matches[0]
             roles = c[LTI+"roles"]
             if not isinstance(roles,list) or not roles or any(role not in (LEARNER,INSTRUCTOR) for role in roles): raise LaunchError("Course enrollment role required")
-            endpoint = c[AGS]
-            if endpoint["lineitem"] != settings["lineitem"] or not isinstance(endpoint["scope"],list) or SCORE_SCOPE not in endpoint["scope"]: raise LaunchError("AGS activity binding rejected")
+            if not self.login_only:
+                endpoint = c[AGS]
+                if endpoint["lineitem"] != settings["lineitem"] or not isinstance(endpoint["scope"],list) or SCORE_SCOPE not in endpoint["scope"]: raise LaunchError("AGS activity binding rejected")
             sub = c["sub"]
             if not isinstance(sub,str) or not sub or len(sub)>512: raise LaunchError()
             identity_key = digest([r["issuer"],r["clientId"],r["deploymentId"],sub])
             name = c.get("name", "Moodle participant")
             if not isinstance(name,str) or len(name)>256 or any(ord(v)<32 for v in name): name="Moodle participant"
-            identity = {"userId":identity_key,"uid":"gw-"+identity_key+"@example.invalid","issuer":r["issuer"],"client":r["clientId"],"deployment":r["deploymentId"],"subject":sub,"name":name,"role":"teacher" if INSTRUCTOR in roles else "student","context":r["contextId"],"resource":resource,"activity":activity,"lineitem":settings["lineitem"]}
+            identity = {"userId":identity_key,"uid":"gw-"+identity_key+"@example.invalid","issuer":r["issuer"],"client":r["clientId"],"deployment":r["deploymentId"],"subject":sub,"name":name,"role":"teacher" if INSTRUCTOR in roles else "student","context":r["contextId"],"resource":resource,"activity":activity,"lineitem":None if self.login_only else settings["lineitem"]}
         except LaunchError: raise
         except Exception as error: raise LaunchError("Signature/claims rejected") from error
-        return self.store.activate(state, binding, now, identity)
+        return self.store.activate(state, binding, now, identity, login_only=self.login_only)

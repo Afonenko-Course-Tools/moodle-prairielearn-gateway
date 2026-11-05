@@ -18,7 +18,7 @@ def origin(value):
 class Activity(Closed):
     kind: Literal["defense","lab","catalog"]
     resourceLinkId: str = Field(min_length=1,max_length=256)
-    lineitem: str
+    lineitem: str | None = None
     workId: str | None = None
 
 class Registration(Closed):
@@ -29,12 +29,12 @@ class Registration(Closed):
     authUrl: str
     jwksUrl: str
     privateJwksUrl: str | None = None
-    tokenUrl: str
+    tokenUrl: str | None = None
     activities: dict[str, Activity]
     @model_validator(mode="after")
     def trusted_urls(self):
         expected=origin(self.issuer)
-        if any(origin(v)!=expected for v in (self.authUrl,self.jwksUrl,self.tokenUrl)): raise ValueError("Registration URL origin mismatch")
+        if any(origin(v)!=expected for v in (self.authUrl,self.jwksUrl,self.tokenUrl) if v is not None): raise ValueError("Registration URL origin mismatch")
         if self.privateJwksUrl is not None:
             mapped=urlsplit(self.privateJwksUrl);public=urlsplit(self.jwksUrl)
             if mapped.scheme!="http" or mapped.hostname!="moodle" or mapped.port not in (None,80) or mapped.username or mapped.password or mapped.path!=public.path or mapped.query or mapped.fragment:
@@ -42,7 +42,7 @@ class Registration(Closed):
         if not self.activities or len({v.resourceLinkId for v in self.activities.values()})!=len(self.activities): raise ValueError("Unique activity bindings required")
         if sum(v.kind=="defense" for v in self.activities.values())>1: raise ValueError("At most one defense lineitem required")
         for activity in self.activities.values():
-            if origin(activity.lineitem)!=expected or activity.kind=="lab" and not activity.workId or activity.kind=="defense" and activity.workId or activity.kind=="catalog" and activity.workId is not None: raise ValueError("Fixed AGS activity/work binding required")
+            if activity.lineitem is not None and origin(activity.lineitem)!=expected or activity.kind=="lab" and not activity.workId or activity.kind=="defense" and activity.workId or activity.kind=="catalog" and activity.workId is not None: raise ValueError("Fixed AGS activity/work binding required")
         return self
 
 class Flow(Closed):
@@ -69,10 +69,12 @@ class Configuration(Closed):
     privateKeyFile: str
     handoffTokenFile: str
     bridge: Bridge
-    deliveryPath: str
+    mode: Literal["grading","login-only"] = "grading"
+    courseKey: str | None = Field(default=None,pattern=r"^[a-z][a-z0-9-]*$")
+    deliveryPath: str | None = None
     instance: str = Field(min_length=1)
     registration: Registration
-    flow: Flow
+    flow: Flow | None = None
     caFile: str | None = None
     pollSeconds: int = Field(default=15,ge=1,le=3600)
     administratorSubject: str | None = Field(default=None,min_length=1,max_length=512)
@@ -80,7 +82,13 @@ class Configuration(Closed):
     def paths(self):
         parsed=urlsplit(self.publicOrigin);origin(self.publicOrigin)
         if parsed.path not in ("","/") or parsed.query: raise ValueError("Public origin must not contain a path/query")
+        if self.mode == "login-only":
+            if self.courseKey is None or self.deliveryPath is not None or self.flow is not None or self.administratorSubject is not None or any(a.kind != "catalog" for a in self.registration.activities.values()):
+                raise ValueError("Login-only requires a courseKey and catalog activities without grading or administrator composition")
+        elif self.deliveryPath is None or self.flow is None or self.courseKey is not None or self.registration.tokenUrl is None or any(a.lineitem is None for a in self.registration.activities.values()):
+            raise ValueError("Grading requires delivery, flow, token URL and AGS activity bindings")
         for p in (self.database,self.privateKeyFile,self.handoffTokenFile,self.bridge.tokenFile,self.deliveryPath):
+            if p is None: continue
             if not Path(p).is_absolute(): raise ValueError("Absolute private runtime paths required")
         return self
 

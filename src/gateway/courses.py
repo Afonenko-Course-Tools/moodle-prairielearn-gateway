@@ -15,13 +15,17 @@ class CoursesConfiguration(Closed):
 
     @model_validator(mode='after')
     def isolated(self):
-        databases=set(); deliveries=set(); origins=set(); activities=set(); client_keys={}
+        databases=set(); deliveries=set(); origins=set(); activities=set(); client_keys={}; native_bindings=set()
         for name, course in self.courses.items():
             if course.routePrefix != '/gateway/courses/'+name: raise ValueError('Course key must match its fixed route prefix')
             database=str(Path(course.database).resolve())
-            delivery=str(Path(course.deliveryPath).resolve())
-            if database in databases or delivery in deliveries: raise ValueError('Courses require separate database and delivery paths')
-            databases.add(database);deliveries.add(delivery);origins.add(course.publicOrigin.rstrip('/'))
+            delivery=str(Path(course.deliveryPath).resolve()) if course.deliveryPath is not None else None
+            binding=(course.instance,course.courseKey) if course.mode == 'login-only' else None
+            if database in databases or delivery is not None and delivery in deliveries or binding is not None and binding in native_bindings: raise ValueError('Courses require separate database, delivery and native bindings')
+            databases.add(database)
+            if delivery is not None: deliveries.add(delivery)
+            if binding is not None: native_bindings.add(binding)
+            origins.add(course.publicOrigin.rstrip('/'))
             reg=course.registration
             scope=(reg.issuer,reg.clientId,reg.deploymentId)
             key=str(Path(course.privateKeyFile).resolve())

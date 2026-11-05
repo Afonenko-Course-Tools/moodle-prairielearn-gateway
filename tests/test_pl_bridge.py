@@ -29,7 +29,7 @@ async def test_bootstrap_enrollment_and_manifest_scoped_native_launch():
     seen=[];binding={"userUid":"gw-synthetic@example.invalid","instance":"pilot","courseKey":"demo"}
     def endpoint(request):
         seen.append(request)
-        if request.method=="PUT":return httpx.Response(200,json={"schemaVersion":1,**binding,"enrolled":True})
+        if request.method=="PUT":return httpx.Response(200,json={"schemaVersion":1,**binding,"enrolled":True,"path":"/pl/course_instance/1/assessments"})
         return httpx.Response(200,json={**binding,"workId":"lab","path":"/pl/course_instance/1/assessment/9/"})
     async with httpx.AsyncClient(transport=httpx.MockTransport(endpoint)) as http:
         bridge=PLClient(http,"http://private-pl:3001","s"*32)
@@ -48,6 +48,6 @@ async def test_native_launch_response_cannot_change_user_or_add_role(extra):
 @pytest.mark.anyio
 @pytest.mark.parametrize("extra",[{"enrolled":1},{"schemaVersion":True},{"role":"Student"}])
 async def test_native_enrollment_requires_closed_typed_evidence(extra):
-    answer={"schemaVersion":1,"userUid":"gw-synthetic@example.invalid","instance":"pilot","courseKey":"demo","enrolled":True,**extra}
+    answer={"schemaVersion":1,"userUid":"gw-synthetic@example.invalid","instance":"pilot","courseKey":"demo","enrolled":True,"path":"/pl/course_instance/1/assessments",**extra}
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request:httpx.Response(200,json=answer))) as http:
         with pytest.raises(GatewayError):await PLClient(http,"http://private-pl:3001","s"*32).enroll("gw-synthetic@example.invalid","pilot","demo")

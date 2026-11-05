@@ -11,9 +11,7 @@
         "url": "http://prairielearn:3001",
         "tokenFile": "/run/secrets/platform-bridge-token"
       },
-      "deliveryPath": "/native/java/EXACT_DELIVERY_HASH",
       "instance": "pilot",
-      "pollSeconds": 15,
       "registration": {
         "issuer": "https://moodle.example",
         "clientId": "registered-client-id",
@@ -22,28 +20,16 @@
         "authUrl": "https://moodle.example/mod/lti/auth.php",
         "jwksUrl": "https://moodle.example/mod/lti/certs.php",
         "privateJwksUrl": null,
-        "tokenUrl": "https://moodle.example/mod/lti/token.php",
         "activities": {
-          "defense": {
-            "kind": "defense",
-            "resourceLinkId": "registered-defense-resource",
-            "lineitem": "https://moodle.example/mod/lti/services.php/lineitems/registered-defense/lineitem",
-            "workId": null
-          },
-          "numbers": {
-            "kind": "lab",
-            "resourceLinkId": "registered-lab-resource",
-            "lineitem": "https://moodle.example/mod/lti/services.php/lineitems/registered-lab/lineitem",
-            "workId": "sec-lab-numbers"
+          "catalog": {
+            "kind": "catalog",
+            "resourceLinkId": "registered-java-catalog-resource"
           }
         }
       },
-      "flow": {
-        "mode": "immediate",
-        "capacity": {}
-      },
-      "administratorSubject": null,
-      "routePrefix": "/gateway/courses/java"
+      "routePrefix": "/gateway/courses/java",
+      "mode": "login-only",
+      "courseKey": "java"
     },
     "system-practice": {
       "publicOrigin": "https://course.example",
@@ -55,9 +41,7 @@
         "url": "http://prairielearn:3001",
         "tokenFile": "/run/secrets/platform-bridge-token"
       },
-      "deliveryPath": "/native/system-practice/EXACT_DELIVERY_HASH",
       "instance": "pilot",
-      "pollSeconds": 15,
       "registration": {
         "issuer": "https://moodle.example",
         "clientId": "registered-client-id",
@@ -66,22 +50,16 @@
         "authUrl": "https://moodle.example/mod/lti/auth.php",
         "jwksUrl": "https://moodle.example/mod/lti/certs.php",
         "privateJwksUrl": null,
-        "tokenUrl": "https://moodle.example/mod/lti/token.php",
         "activities": {
-          "streams": {
-            "kind": "lab",
-            "resourceLinkId": "registered-system-streams-resource",
-            "lineitem": "https://moodle.example/mod/lti/services.php/lineitems/registered-system-streams/lineitem",
-            "workId": "sec-pl-streams-pilot"
+          "catalog": {
+            "kind": "catalog",
+            "resourceLinkId": "registered-system-practice-catalog-resource"
           }
         }
       },
-      "flow": {
-        "mode": "immediate",
-        "capacity": {}
-      },
-      "administratorSubject": null,
-      "routePrefix": "/gateway/courses/system-practice"
+      "routePrefix": "/gateway/courses/system-practice",
+      "mode": "login-only",
+      "courseKey": "system-practice"
     }
   }
 }

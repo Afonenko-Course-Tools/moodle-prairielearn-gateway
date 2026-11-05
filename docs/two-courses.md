@@ -7,16 +7,23 @@ System-Practice. На уровне Moodle регистрируется **оди�
 
 `config/courses.example.json` показывает конфигурацию `schemaVersion: 2`:
 каждый именованный курс содержит закрытую Configuration v2. Его путь
-строго равен `/gateway/courses/<id>`, delivery и SQLite file отдельные.
+строго равен `/gateway/courses/<id>`, SQLite file отдельный. Основной пример
+использует `mode: login-only`: каждый профиль задаёт собственный `courseKey`
+и `instance`, а delivery не загружается. Один LTI resource tuple и один native
+binding не могут принадлежать двум профилям. Для сохранённого режима `grading`
+есть [отдельный пример](../config/courses.grading.example.json), где также
+требуется отдельный delivery path.
 Cookie `GatewaySession` ограничен этим path; session, assignment, observation
 и outbox другого курса не смешиваются. Для одного курса используется тот же
 контейнер конфигурации `schemaVersion: 2` с единственной записью в `courses`
 и путём `/gateway/courses/<id>`. Вложенная запись не содержит `schemaVersion`.
 Путь `/gateway/lti/login` служит общим OIDC endpoint; отдельный однокурсовый
 профиль через `/gateway` не поддерживается. Прежняя Configuration v1
-отклоняется. Переход с несовместимой прежней схемы требует свежую БД schema3
-без переноса старых назначений. Штатный новый instance в существующей schema3
-описан ниже; он не требует замены БД.
+отклоняется. SQLite версии 3 автоматически мигрирует в версию 4 с сохранением строк.
+Неизвестные схемы отклоняются. Переход в `login-only` сохраняет ту же БД,
+UID и историю; подробности — [в договоре входа](login-only.md).
+Ниже описаны также сохранённые возможности режима `grading`; его flow,
+AGS и административные настройки не требуются для `login-only`.
 
 ## Регистрация Moodle
 
@@ -27,13 +34,13 @@ Cookie `GatewaySession` ограничен этим path; session, assignment, o
   `https://SERVER/gateway/courses/java/lti/launch` и
   `https://SERVER/gateway/courses/system-practice/lti/launch`;
 - один открытый tool key либо соответствующий JWKS URL;
-- отправку имени и ролей, получение оценок AGS, доверие к CA сервера.
+- отправку имени и ролей и доверие к CA сервера; AGS требуется только режиму `grading`.
 
 Оба профиля Gateway должны использовать один signing key для общей регистрации.
 В конфигурации нужны фактические issuer/client/deployment/context, authorization,
-JWKS и token endpoints Moodle. Их нельзя угадать по номеру native-курса.
+JWKS endpoints Moodle; token endpoint нужен только для `grading`. Их нельзя угадать по номеру native-курса.
 Для каждого элемента Moodle отдельно фиксируются подписанные resourceLinkId
-и AGS lineitem. Два native-курса не могут владеть одним LTI resource tuple.
+и, для `grading`, AGS lineitem. Два native-курса не могут владеть одним LTI resource tuple.
 
 В самом Moodle-курсе преподаватель добавляет элементы «Внешний инструмент» с
 общей регистрацией, но разными tool URL согласно выбранному native-курсу.
@@ -99,14 +106,14 @@ identity. Подготовка новой immutable delivery одного кур
 Замена delivery **в том же instance** несовместима с его существующими
 назначениями: Gateway требует explicit delivery migration и не переписывает
 их автоматически. Если вместо согласованной миграции выбирается изолированное
-новое состояние, нужна свежая SQLite schema3. Такая замена БД перестаёт
+новое состояние, нужна свежая SQLite schema4. Такая замена БД перестаёт
 распознавать прежние `GatewaySession`: сохранение signing key не сохраняет
 session bearer, и потребуется новый подписанный Moodle launch.
 
 Для нового semester можно подготовить **новый native course и отдельный
 instance**, например `2026-2027-s1`, затем переключить существующий профиль на
 его verified delivery и согласованную native bridge binding. Сохраняются
-существующая SQLite schema3, routePrefix, HTTPS origin, LTI registration и
+существующая SQLite schema4, routePrefix, HTTPS origin, LTI registration и
 activity bindings, signing/handoff/bridge keys, tokens и TLS certificates.
 Неистёкшие `GatewaySession` и CSRF продолжают распознаваться в той же БД и
 cookie path; обычный TTL и одноразовость handoff/state остаются прежними.
