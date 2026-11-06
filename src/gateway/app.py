@@ -132,11 +132,13 @@ def create_app(config, *, store=None, clients=None, clock=time.time):
 
     @app.get('/internal/handoff' + config.routePrefix.removeprefix('/gateway') + '/{flow}')
     async def consume(flow: str, request: Request):
-        browser_nonce(request)
+        binding = browser_nonce(request)
+        if not binding:
+            raise LaunchError('Требуется browser credential')
         expected = 'Bearer ' + (app.state.handoff_secret or secrets.token_urlsafe(32))
         if not secrets.compare_digest(request.headers.get('authorization', ''), expected):
             raise LaunchError('Требуется private service authentication')
-        value = store.consume_handoff(flow, int(clock()))
+        value = store.consume_handoff(flow, binding, int(clock()))
         name = verified_name_header(value['displayName'])
         return JSONResponse(value, headers={'X-Verified-Uid': value['uid'], 'X-Verified-Name-UTF8-B64': name, 'X-Verified-Target': value['target']})
 

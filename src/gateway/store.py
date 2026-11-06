@@ -156,11 +156,11 @@ class Store:
                 raise LaunchError('Повторный или устаревший LTI запуск')
         return flow, snapshot
 
-    def consume_handoff(self, flow, now):
+    def consume_handoff(self, flow, binding, now):
         with self.transaction() as db:
             self._cleanup(db, now)
-            row = db.execute('SELECT * FROM auth_attempts WHERE flow_hash=? AND phase=1 AND expires>? AND handoff_expires>?',
-                             (digest(flow), now, now)).fetchone()
+            row = db.execute('SELECT * FROM auth_attempts WHERE flow_hash=? AND browser_hash=? AND phase=1 AND expires>? AND handoff_expires>?',
+                             (digest(flow), digest(binding), now, now)).fetchone()
             if not row:
                 raise LaunchError('Handoff отсутствует, просрочен или уже потреблён')
             snapshot = VerifiedLaunch(**json.loads(row['launch_json']))
