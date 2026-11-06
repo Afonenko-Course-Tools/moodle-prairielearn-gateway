@@ -7,8 +7,12 @@ pollSeconds и administratorSubject в конфигурации отклоняю
 Для каждого курса укажите новый отдельный database path, например
 `/var/lib/gateway/java-auth.sqlite`. Новая схема содержит только `auth_schema`
 и `auth_attempts`, без users, sessions и учебных таблиц. Существующая старая или
-неподдерживаемая SQLite отклоняется через read-only проверку до writable
-connection, WAL, chmod или миграции. Автоматического переноса и очистки старой БД
+неподдерживаемая SQLite отклоняется через `mode=ro&immutable=1` проверку
+схемы main DB до writable connection, WAL, chmod или миграции. Обычный
+`mode=ro` здесь недостаточен: он способен создавать или менять WAL/SHM файлы.
+Preflight не меняет существующие sidecars и не создаёт отсутствующие. Схема новой
+auth DB сохраняется в main DB при первой инициализации и в runtime не меняется;
+актуальные transient данные из WAL читаются штатно только после preflight. Автоматического переноса и очистки старой БД
 нет. Никогда не направляйте новый процесс на прежнюю рабочую SQLite.
 
 Сохраните прежний checkout/config/database и все private files. Новый Gateway

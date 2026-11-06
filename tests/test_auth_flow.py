@@ -390,3 +390,55 @@ async def test_expired_pending_state_and_old_cookies_cannot_launch(tmp_path):
         clock[0]=1300
         assert (await browser.post(PREFIX+'/lti/launch',data=body,headers={'Cookie':'GatewayLogin='+old})).status_code==403
     assert platform.calls==[]
+
+
+def sqlite_files(directory):
+    return {p.name:(p.read_bytes(),p.stat().st_mode&0o777) for p in directory.iterdir()}
+
+
+def test_closed_legacy_wal_database_refused_without_creating_sidecars(tmp_path):
+    path=tmp_path/'old.sqlite'
+    db=sqlite3.connect(path)
+    try:
+        assert db.execute('PRAGMA journal_mode=WAL').fetchone()==('wal',)
+        db.execute('CREATE TABLE users(uid TEXT)')
+        db.execute("INSERT INTO users VALUES('synthetic')")
+        db.commit()
+    finally:db.close()
+    path.chmod(0o640)
+    assert set(sqlite_files(tmp_path))=={'old.sqlite'}
+    before=sqlite_files(tmp_path)
+    with pytest.raises(GatewayError):Store(path)
+    assert sqlite_files(tmp_path)==before
+
+
+def test_active_legacy_wal_database_refused_without_changing_existing_sidecars(tmp_path):
+    path=tmp_path/'old.sqlite'
+    db=sqlite3.connect(path)
+    try:
+        assert db.execute('PRAGMA journal_mode=WAL').fetchone()==('wal',)
+        db.execute('PRAGMA wal_autocheckpoint=0')
+        db.execute('CREATE TABLE users(uid TEXT)')
+        db.commit()
+        db.execute("INSERT INTO users VALUES('synthetic')")
+        db.commit()
+        for p in tmp_path.iterdir():p.chmod(0o640)
+        before=sqlite_files(tmp_path)
+        assert set(before)=={'old.sqlite','old.sqlite-wal','old.sqlite-shm'}
+        assert before['old.sqlite-wal'][0] and before['old.sqlite-shm'][0]
+        with pytest.raises(GatewayError):Store(path)
+        assert sqlite_files(tmp_path)==before
+    finally:db.close()
+
+
+def test_auth_database_reopen_retains_pending_state_with_active_wal(tmp_path):
+    path=tmp_path/'auth.sqlite';store=Store(path)
+    db=store.connect()
+    try:
+        db.execute('PRAGMA wal_autocheckpoint=0')
+        db.execute('SELECT count(*) FROM auth_attempts').fetchone()
+        pending=store.state('browser',1000)
+        assert (tmp_path/'auth.sqlite-wal').stat().st_size>0
+        reopened=Store(path)
+        assert reopened.pending(pending['state'],'browser',1001)['nonce']==pending['nonce']
+    finally:db.close()

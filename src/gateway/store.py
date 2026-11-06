@@ -84,7 +84,12 @@ class Store:
 
     def _validate_existing(self):
         try:
-            with closing(sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True)) as db:
+            # mode=ro всё ещё может создавать/менять WAL shared-memory файлы.
+            # Проверяем только неизменяемую схему main DB без WAL/SHM. Первая
+            # инициализация закрывает connection под startup lock и сохраняет
+            # схему в main DB; runtime больше не меняет её. Сами попытки из WAL
+            # читаются штатным connect только после этого preflight.
+            with closing(sqlite3.connect(self.path.as_uri() + '?mode=ro&immutable=1', uri=True)) as db:
                 tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 columns = [r[1] for r in db.execute('PRAGMA table_info(auth_attempts)')]
                 if (tables != {'auth_schema', 'auth_attempts'}
