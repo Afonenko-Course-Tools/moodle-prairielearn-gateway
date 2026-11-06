@@ -18,8 +18,9 @@ private enrollment. Moodle подтверждает identity и роль кур�
    в одном неизменяемом snapshot. Email не определяет UID и не объединяет identity.
 4. Redirect `/gateway/courses/<key>/pl/<flow>` обрабатывает private proxy PL.
    Он однократно получает `{uid,displayName,email:uid,target}` через
-   `/internal/handoff/courses/<key>/<flow>` с Bearer service token и создаёт native
-   PL session. Header имени — `X-Verified-Name-UTF8-B64: v1.<base64url UTF-8>`;
+   `/internal/handoff/courses/<key>/<flow>` с Bearer service token и исходным Cookie header браузера.
+   Gateway сверяет `GatewayLogin` с browser hash попытки до потребления handoff
+   и выдачи UID; затем proxy создаёт native PL session. Header имени — `X-Verified-Name-UTF8-B64: v1.<base64url UTF-8>`;
    также передаются `X-Verified-Uid` и `X-Verified-Target`.
 5. `/gateway/courses/<key>/bootstrap/<flow>` требует точный flow, browser nonce,
    потреблённый handoff и неизменные регистрацию/native mapping. Попытка атомарно

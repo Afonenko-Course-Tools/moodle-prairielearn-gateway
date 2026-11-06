@@ -23,7 +23,12 @@ Learner — `student`. Email владельца в Learner launch не меня�
 
 ## Private handoff
 
-Требуется `Authorization: Bearer <handoff service token>`. Однократный GET
+Требуются `Authorization: Bearer <handoff service token>` и исходный Cookie
+header браузера. Существующий парсер проверяет единственный `GatewayLogin`;
+его hash должен совпасть с browser hash попытки до потребления handoff и выдачи
+identity. Отсутствующий, чужой, некорректный или дублированный nonce отклоняется
+без потребления корректного flow. Остальные cookies Gateway не использует.
+Однократный GET
 `/internal/handoff/courses/<key>/<flow>` возвращает ровно
 `{uid,displayName,email:uid,target}` и `X-Verified-Uid`,
 `X-Verified-Name-UTF8-B64`, `X-Verified-Target`. Target — сохранённый одноразовый

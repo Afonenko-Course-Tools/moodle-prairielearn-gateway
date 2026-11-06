@@ -71,7 +71,7 @@ async def activate(browser,platform,**kwargs):
 
 
 async def handoff(browser,flow,prefix=PREFIX):
-    return await browser.get('/internal/handoff'+prefix.removeprefix('/gateway')+'/'+flow,headers={'Authorization':'Bearer '+'h'*32})
+    return await browser.get('/internal/handoff'+prefix.removeprefix('/gateway')+'/'+flow,headers={'Authorization':'Bearer '+'h'*32,'Cookie':'GatewayLogin='+browser.cookies['GatewayLogin']})
 
 
 @pytest.mark.anyio
@@ -442,3 +442,35 @@ def test_auth_database_reopen_retains_pending_state_with_active_wal(tmp_path):
         reopened=Store(path)
         assert reopened.pending(pending['state'],'browser',1001)['nonce']==pending['nonce']
     finally:db.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('credential', ['missing', 'wrong-browser', 'duplicate', 'malformed', 'bare-duplicate', 'duplicate-headers', 'wrong-service'])
+async def test_handoff_rejects_unbound_request_before_identity_and_preserves_owner_flow(tmp_path, credential):
+    platform=Platform();app=create_app(configuration(tmp_path),clients=platform,clock=lambda:1000);app.state.handoff_secret='h'*32
+    async with browser_for(app) as owner, browser_for(app) as other:
+        _,_,flow=await activate(owner,platform)
+        await begin(other,platform)
+        nonce=owner.cookies['GatewayLogin']
+        cookies={
+            'missing':'pl2_session=synthetic-private-session',
+            'wrong-browser':'GatewayLogin='+other.cookies['GatewayLogin'],
+            'duplicate':'GatewayLogin='+nonce+'; GatewayLogin='+nonce,
+            'malformed':'GatewayLogin=bad',
+            'bare-duplicate':'GatewayLogin; GatewayLogin='+nonce,
+            'wrong-service':'GatewayLogin='+nonce,
+            'duplicate-headers':'GatewayLogin='+nonce,
+        }
+        headers={'Authorization':'Bearer '+('x'*32 if credential=='wrong-service' else 'h'*32),'Cookie':cookies[credential]}
+        if credential=='duplicate-headers':
+            headers=[('Authorization','Bearer '+'h'*32),('Cookie','GatewayLogin='+nonce),('Cookie','GatewayLogin='+nonce)]
+        denied=await other.get('/internal/handoff/courses/demo/'+flow,headers=headers)
+        assert denied.status_code==403
+        assert 'set-cookie' not in denied.headers
+        assert not any(name.startswith('x-verified-') for name in denied.headers)
+        assert platform.calls==[]
+        accepted=await handoff(owner,flow)
+        assert accepted.status_code==200 and accepted.headers['x-verified-uid']==UID
+        assert (await handoff(owner,flow)).status_code==403
+        assert (await owner.get(accepted.json()['target'])).status_code==303
+        assert len(platform.calls)==1
