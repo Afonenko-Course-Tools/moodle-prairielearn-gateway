@@ -46,13 +46,13 @@
 
 **Файлы:** src/gateway/{app,config,store,launch,pl,courses,errors}.py, schema/runtime.sql; tests auth/config/transport; tools/run-gateway.py, Dockerfile/compose/config, CI, README/spec/docs. Удалить src/gateway/{assignments,grades,ags,delivery_v4}.py и реальные obsolete consumers/fixtures, не переносить их в product archive.
 
-- [ ] Написать содержательные RED tests против baseline: reuse after success/Bridge failure, saved mapping change, exact credential, old parallel callbacks, no users/legacy writes и oldDB preservation.
-- [ ] Наблюдать ожидаемые RED от отсутствующего поведения, а не import failures/typos; записать краткие результаты в обычный implementation report.
-- [ ] Реализовать минимальный новый auth-only flow; проверенную LTI криптографию/UID сохранить. Типизировать реальные границы существующим Pydantic/обычными dataclasses, без повторных DTO layers/own AST/parser/framework.
-- [ ] Проверить positive genuine signed Student/Instructor/Owner-email Learner, negative LTI matrix, expiry/replay, duplicate cookies/root+nested profiles, exact current flow, success+native logout/rebootstrap, registration+course mapping replacement, Bridge failure/timeout/cancel/malformed ответ и отсутствие legacy runtime routes/writes.
-- [ ] Удалить obsolete tooling/docs/fixtures и составить простой переход: новая auth DB, прежние cookies недействительны, oldDB сохранена, точные новые config dependencies и откат без удаления native data.
-- [ ] Полный pytest один раз после focused tests. Не запускать Moodle/Docker/экспорт Quarto и не устанавливать packages без необходимости.
-- [ ] Self-review, локальные commits, краткий report /tmp/s2-auth-only-implementation.txt; не push.
+- [x] Написать содержательные RED tests против baseline: reuse after success/Bridge failure, saved mapping change, exact credential, old parallel callbacks, no users/legacy writes и oldDB preservation.
+- [x] Наблюдать ожидаемые RED от отсутствующего поведения, а не import failures/typos; записать краткие результаты в обычный implementation report.
+- [x] Реализовать минимальный новый auth-only flow; проверенную LTI криптографию/UID сохранить. Типизировать реальные границы существующим Pydantic/обычными dataclasses, без повторных DTO layers/own AST/parser/framework.
+- [x] Проверить positive genuine signed Student/Instructor/Owner-email Learner, negative LTI matrix, expiry/replay, duplicate cookies/root+nested profiles, exact current flow, success+native logout/rebootstrap, registration+course mapping replacement, Bridge failure/timeout/cancel/malformed ответ и отсутствие legacy runtime routes/writes.
+- [x] Удалить obsolete tooling/docs/fixtures и составить простой переход: новая auth DB, прежние cookies недействительны, oldDB сохранена, точные новые config dependencies и откат без удаления native data.
+- [ ] Полный pytest один раз после focused tests: по уточнению координатора передан ему после локального commit; исполнитель не запускал полный suite. Moodle/Docker/экспорт Quarto не запускались, packages не устанавливались.
+- [x] Self-review, локальные commits, краткий report /tmp/s2-auth-only-implementation.txt; не push.
 
 ## Задача2 — независимая приёмка и передача
 

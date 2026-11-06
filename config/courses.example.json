@@ -3,8 +3,7 @@
   "courses": {
     "java": {
       "publicOrigin": "https://course.example",
-      "database": "/var/lib/gateway/java.sqlite",
-      "privateKeyFile": "/run/secrets/gateway-private-key.json",
+      "database": "/var/lib/gateway/java-auth.sqlite",
       "handoffTokenFile": "/run/secrets/gateway-handoff-token",
       "caFile": "/run/tls/ca.crt",
       "bridge": {
@@ -22,19 +21,16 @@
         "privateJwksUrl": null,
         "activities": {
           "catalog": {
-            "kind": "catalog",
             "resourceLinkId": "registered-java-catalog-resource"
           }
         }
       },
       "routePrefix": "/gateway/courses/java",
-      "mode": "login-only",
       "courseKey": "java"
     },
     "system-practice": {
       "publicOrigin": "https://course.example",
-      "database": "/var/lib/gateway/system-practice.sqlite",
-      "privateKeyFile": "/run/secrets/gateway-private-key.json",
+      "database": "/var/lib/gateway/system-practice-auth.sqlite",
       "handoffTokenFile": "/run/secrets/gateway-handoff-token",
       "caFile": "/run/tls/ca.crt",
       "bridge": {
@@ -52,13 +48,11 @@
         "privateJwksUrl": null,
         "activities": {
           "catalog": {
-            "kind": "catalog",
             "resourceLinkId": "registered-system-practice-catalog-resource"
           }
         }
       },
       "routePrefix": "/gateway/courses/system-practice",
-      "mode": "login-only",
       "courseKey": "system-practice"
     }
   }

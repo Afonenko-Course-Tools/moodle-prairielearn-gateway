@@ -1,78 +1,60 @@
-# Проверенный LTI-вход и приватный handoff
+# Контракт auth-only входа
 
-Gateway принимает закрытую фиксированную Moodle регистрацию. HTTPS issuer,
-client, deployment, context и resource-link задаются вне Git. Authorization,
-JWKS и заданные token/lineitem URL обязаны иметь origin зарегистрированного
-issuer. Приватный JWKS transport ограничен `http://moodle` с тем же путём;
-подписанные issuer/audience остаются внешними HTTPS значениями.
+## Identity и LTI
 
-Основной режим `mode: login-only` описан в [договоре входа](../docs/login-only.md).
-Он направляет обе роли в штатный список курса без обязательного AGS claim,
-delivery и запуска worker. Ниже описаны общие проверки и сохранённый `grading`.
+UID сохраняет прежнее вычисление буквально:
+`gw-` + SHA-256 от JSON массива `[issuer,clientId,deploymentId,sub]` с
+`sort_keys=True,separators=(",",":"),allow_nan=False` + `@example.invalid`.
+JSON сериализация не меняется. Email не является identity и не объединяет учётные
+записи; displayName также не является ключом.
 
-`GET` или `POST /gateway/lti/login` принимает стандартные issuer, `client_id`,
-`target_link_uri`, `login_hint`, `lti_message_hint` и необязательный
-`lti_deployment_id`. Неизвестные поля, чужая регистрация и отсутствующие hints
-отклоняются. OIDC запрос использует `form_post`, RS256 и случайные state/nonce.
-SQLite хранит hash state и browser binding, nonce и срок 300 секунд. Cookie
-привязки имеет Secure, HttpOnly и SameSite=None для POST из Moodle.
+Принимается только зарегистрированный Moodle `LtiResourceLinkRequest` версии
+`1.3.0`, подписанный RS256 известным уникальным `kid` из Moodle JWKS. Header
+`jku`, `jwk`, `x5u`, `x5c` отклоняется. Проверяются issuer/aud/azp, непустой `sub`,
+state/nonce/browser credential, deployment, context, resource и target_link_uri.
+`iat`/`exp` — целые числа; возраст `iat` не более 300 секунд, допустимый уход часов
+вперёд не более 5 секунд, `exp>now`, `exp>iat`, `exp<=iat+600`. Использованный state
+не принимается повторно. Роли только Learner/Instructor; Instructor даёт `teacher`,
+Learner — `student`. Email владельца в Learner launch не меняет роль Gateway.
 
-`POST /gateway/courses/<course>/lti/launch` принимает только `state` и `id_token`
-размером не более 64 KiB. joserfc проверяет RS256 с единственным `kid` фиксированного
-JWKS и обязательные claims. Заголовки с посторонними remote/embedded ключами
-отклоняются. Проверяются issuer, audience, azp, subject, nonce, целочисленные
-iat/exp, свежесть 300 секунд, срок токена не более 600 секунд, deployment,
-LtiResourceLinkRequest/1.3.0, точные target/context/resource и роли Learner или
-Instructor. В режиме `grading` подписанный AGS endpoint дополнительно обязан
-совпасть с activity и содержать score scope.
+Подтверждённый email нормализуется в ASCII lower-case mailbox; неподходящий адрес
+или явный `email_verified`, отличный от bool `true`, даёт `null`. Сохраняется
+исходное подтверждённое значение каждого launch.
 
-UID вычисляется сервером из прежнего tuple issuer/client/deployment/subject.
-Пользовательский UID из браузера, имя, cookie или identity header не выбирают
-пользователя. SQLite атомарно потребляет state и создаёт часовую сессию.
-Повторное использование, неверный browser binding и истечение TTL запрещены.
-Проверенный email извлекается лишь после подписи и регистрационных guards,
-нормализуется и сохраняется в исходной session. Этот адрес не входит в UID.
-Login-only enrollment передаёт Bridge ровно userUid, instance, courseKey,
-role и email; приватная Bridge политика сопоставляет native права.
-Подробности доверия к отсутствующему `email_verified`, отклонения неправильного
-email и миграции SQLite версии 5 — [в договоре входа](../docs/login-only.md).
-Операции изменения в сохранённом режиме `grading` требуют точный публичный
-Origin и session CSRF token.
+## Private handoff
 
-Handoff хранит hash токена, session и target, действует 60 секунд и потребляется
-однократно. Bootstrap с токеном проходит два состояния потребления: private
-native auth и возврат проверенной identity/роли в профиль. Открытые redirects,
-управляющие символы и произвольные native targets запрещены.
+Требуется `Authorization: Bearer <handoff service token>`. Однократный GET
+`/internal/handoff/courses/<key>/<flow>` возвращает ровно
+`{uid,displayName,email:uid,target}` и `X-Verified-Uid`,
+`X-Verified-Name-UTF8-B64`, `X-Verified-Target`. Target — сохранённый одноразовый
+bootstrap URL того же курса. Native PL proxy использует этот verified target
+во внутреннем callback. Gateway не выставляет native PL cookies.
 
-Proxy владеет `/gateway/courses/<course>/pl/{token}` и вызывает приватный
-`GET /internal/handoff/courses/<course>/{token}` с отдельным service bearer.
-Успешный JSON содержит только uid/displayName/email/target. Заголовки
-`X-Verified-Uid`, `X-Verified-Name-UTF8-B64` и `X-Verified-Target`
-поддерживают `auth_request`. Имя передаётся как `v1.` и canonical base64url
-без padding от строгого UTF-8; JSON сохраняет исходную Unicode-строку.
-Граница — 256 Unicode scalar values, 1024 UTF-8 bytes, 1369 ASCII wire chars.
-Старый raw Name header не выдаётся. Недопустимый signed claim использует
-прежнюю fallback policy; пустая допустимая строка кодируется `v1.`.
-Имя не входит в UID/digest и не определяет роль.
+Bootstrap требует точный flow и browser credential, потреблённый handoff, TTL и
+равенство текущей регистрации/native logical mapping сохранённым значениям.
+Все callbacks оставляют cookie без изменений. До `await Bridge` вся попытка
+становится terminal; повторного зачисления по ней нет даже после сетевой ошибки,
+cancellation или native logout.
 
-Proxy удаляет клиентские identity headers/cookies на этом пути, передаёт только
-проверенную identity и серверный `pl2_pre_auth_url`, затем вызывает Community
-`/pl/shibcallback`. PL создаёт собственную обычную сессию. Private PL, Bridge
-и Gateway listeners должны быть недоступны публично. Gateway отключает доверие
-forwarded headers и access logs; окружающий proxy не должен писать секреты.
+## Private enrollment
 
-## Сохранённый режим grading
+Единственный запрос: `PUT /internal/gateway/enrollment` с Bearer Bridge token.
+Request имеет ровно пять полей:
 
-Этот режим остаётся режимом по умолчанию прежней конфигурации и требует delivery,
-flow и AGS настройки. Лабораторная ведёт на assessment соответствующей работы,
-каталог — на прежний интерфейс Gateway. Worker продолжает обработку своих
-реальных результатов. Вход Instructor сам по себе не назначает native права.
+```json
+{"userUid":"gw-synthetic@example.invalid","instance":"pilot","courseKey":"java","role":"student","email":null}
+```
 
-Только явно заданный `administratorSubject` с ролью teacher и точной проверенной
-issuer/client/deployment identity может вызвать
-`POST /gateway/courses/<course>/launch/administrator` с Origin/CSRF.
-Bridge отдельно сверяет `administratorUid`, существующего native пользователя
-и service bearer. После подтверждённого grant устанавливается штатный cookie
-`pl2_access_as_administrator=active` (Secure/HttpOnly/SameSite=Lax); native
-middleware требует настоящую administrator запись. Удаление config binding
-не снимает уже существующие native права. В `login-only` эта настройка запрещена.
+`role` — `student|teacher`, `email` — canonical string либо `null`.
+Ожидается HTTP 200 с ровно шестью полями:
+
+```json
+{"schemaVersion":1,"userUid":"gw-synthetic@example.invalid","instance":"pilot","courseKey":"java","enrolled":true,"path":"/pl/course_instance/42/assessments"}
+```
+
+`schemaVersion` — int `1`, `enrolled` — bool `true`, userUid/instance/courseKey
+должны буквально совпадать с запросом. Path допускает только
+`/pl/course_instance/[1-9][0-9]*/assessments` без origin/query/trailing slash.
+Extra/missing/type/mapping mismatch, non-200, redirect, malformed JSON или ответ
+больше 65536 байт дают отказ. Повторных запросов нет. Ошибка предлагает новый
+переход из Moodle; возможные native изменения не откатываются.

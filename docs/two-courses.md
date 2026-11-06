@@ -1,143 +1,22 @@
-# Два native-курса из одного курса Moodle
+# Несколько курсов на одном origin
 
-Один Moodle-курс Java может содержать отдельные элементы для работ Java и
-System-Practice. На уровне Moodle регистрируется **один** LTI 1.3 tool.
-При одинаковых issuer, client ID, deployment ID и subject Gateway вычисляет
-один PL UID: переход к другому native-курсу не создаёт второго человека.
+`config/courses.example.json` задаёт `java` и `system-practice`. У каждого курса
+свои routePrefix, database path, LTI resourceLinkId и native `(instance,courseKey)`.
+Общий origin и общий handoff service token нужны private proxy. Identity UID
+вычисляется из Moodle registration tuple и subject, поэтому один участник
+сохраняет UID в обоих курсах при одинаковой регистрации.
 
-`config/courses.example.json` показывает конфигурацию `schemaVersion: 2`:
-каждый именованный курс содержит закрытую Configuration v2. Его путь
-строго равен `/gateway/courses/<id>`, SQLite file отдельный. Основной пример
-использует `mode: login-only`: каждый профиль задаёт собственный `courseKey`
-и `instance`, а delivery не загружается. Один LTI resource tuple и один native
-binding не могут принадлежать двум профилям. Для сохранённого режима `grading`
-есть [отдельный пример](../config/courses.grading.example.json), где также
-требуется отдельный delivery path.
-Cookie `GatewaySession` ограничен этим path; session, assignment, observation
-и outbox другого курса не смешиваются. Для одного курса используется тот же
-контейнер конфигурации `schemaVersion: 2` с единственной записью в `courses`
-и путём `/gateway/courses/<id>`. Вложенная запись не содержит `schemaVersion`.
-Путь `/gateway/lti/login` служит общим OIDC endpoint; отдельный однокурсовый
-профиль через `/gateway` не поддерживается. Прежняя Configuration v1
-отклоняется. SQLite версий 3/4 автоматически мигрирует в версию 5 с сохранением строк.
-Неизвестные схемы отклоняются. Переход в `login-only` сохраняет ту же БД,
-UID и историю; подробности — [в договоре входа](login-only.md).
-Ниже описаны также сохранённые возможности режима `grading`; его flow,
-AGS и административные настройки не требуются для `login-only`.
+Moodle может начать login через `/gateway/lti/login`: dispatcher выбирает ровно
+один курс по точному зарегистрированному `target_link_uri`. Доступен и отдельный
+`/gateway/courses/<key>/lti/login`. Cookie `GatewayLogin` всегда имеет
+`Path=/gateway`; она доступна root dispatcher и nested callbacks обоих курсов.
+Два одноимённых cookie отклоняются. При параллельных первых login без cookie
+callback должен совпадать с фактически принятой браузером cookie.
 
-## Регистрация Moodle
+Новый login отменяет прежнюю попытку только в своей course DB. После genuine
+launch snapshot содержит регистрацию, activity, target и native mapping;
+изменение mapping после restart требует нового Moodle launch. Подстановка
+текущего mapping вместо сохранённого не допускается.
 
-Администратор Moodle один раз задаёт:
-
-- OIDC initiation URL: `https://SERVER/gateway/lti/login`;
-- разрешённые redirect URIs: обе ссылки
-  `https://SERVER/gateway/courses/java/lti/launch` и
-  `https://SERVER/gateway/courses/system-practice/lti/launch`;
-- один открытый tool key либо соответствующий JWKS URL;
-- отправку имени и ролей и доверие к CA сервера; AGS требуется только режиму `grading`.
-
-Оба профиля Gateway должны использовать один signing key для общей регистрации.
-В конфигурации нужны фактические issuer/client/deployment/context, authorization,
-JWKS endpoints Moodle; token endpoint нужен только для `grading`. Их нельзя угадать по номеру native-курса.
-Для каждого элемента Moodle отдельно фиксируются подписанные resourceLinkId
-и, для `grading`, AGS lineitem. Два native-курса не могут владеть одним LTI resource tuple.
-
-В самом Moodle-курсе преподаватель добавляет элементы «Внешний инструмент» с
-общей регистрацией, но разными tool URL согласно выбранному native-курсу.
-Java может иметь defense и lab элементы; System-Practice пилот — только lab.
-Общий login выбирает только заранее зарегистрированный target_link_uri, затем
-профиль проверяет подписанный JWT, nonce/state и точные activity bindings.
-
-Начиная с Gateway 2.0.1, `client_id` в login initiation необязателен по LTI 1.3 §4.1.3; штатный Moodle
-3.7 его не отправляет. При его отсутствии выбранный по точному target профиль
-использует свой настроенный client ID в authorization request. Явный иной либо
-пустой client ID отклоняется. Подписанный JWT по-прежнему обязан содержать
-правильный audience; issuer, deployment и activity bindings проверяются полностью.
-
-Настройка только элемента курса достаточна **после** общей регистрации tool,
-доверия HTTPS и подготовки этих bindings оператором. Приёмка с локальным mock не подтверждает настройки Moodle учреждения; их проверяют отдельно на фактической регистрации.
-
-## Автоматическое зачисление и преподаватель
-
-В `login-only` Gateway передаёт приватному Bridge только role/email из
-проверенной исходной LTI session. Native права владельца и преподавателей
-определяет Bridge; `ownerEmail` отсутствует в Gateway конфигурации.
-Отсутствующий или недоверенный email не даёт повышения по адресу владельца. Вход
-преподавателя и студента использует тот же прежний UID и штатный список курса.
-Дальнейшее описание `administratorSubject` относится только к сохранённому
-режиму `grading`, а не к новой приватной политике login-only enrollment.
-
-Первый проверенный Student launch создаёт постоянную запись пользователя
-в SQLite выбранного профиля и обеспечивает native Student enrollment в его
-course instance. Общий UID связывает обе записи с одним native PL user.
-Заранее переносить весь roster не требуется; до первого launch студент не
-появляется в профиле. Данные переживают перезапуск Gateway при сохранении SQLite.
-
-`administratorSubject` содержит точный subject единственного преподавателя
-для этой регистрации. Native bridge отдельно проверяет соответствующий явный
-`administratorUid`, фактического native user и закрытый служебный bearer.
-Только эта identity с Instructor role получает доступ к административной панели
-и штатный активный admin mode PL. Один Instructor claim или email не повышает
-права. Разрешение глобального PL administrator даёт доступ ко всем курсам;
-добавлять преподавателя отдельно в каждый native-курс не нужно.
-
-## Прямой переход после входа
-
-Начиная с Gateway 2.0.2, проверенный запуск лабораторной не показывает
-промежуточную страницу «Мои работы»:
-
-- студент проходит штатную native авторизацию и зачисление, затем открывает
-  assessment работы, привязанной к текущему элементу Moodle;
-- явно настроенный администратор с ролью Instructor открывает административную
-  панель PrairieLearn;
-- остальные преподаватели открывают `/pl/` с уже назначенными native правами.
-  Этот переход не назначает права администратора или преподавателя курса.
-
-Выбор цели выполняется только после проверки подписи, nonce/state и точных
-bindings. Native авторизация по-прежнему использует одноразовый handoff.
-Ошибка зачисления или получения assessment останавливает вход; произвольный
-URL из запроса не используется. Worker AGS продолжает работать с lineitem
-текущей активности.
-
-Для защиты реферата сохраняется страница выбора и назначения работы. Студент
-перед её открытием проходит native зачисление; преподаватель использует
-существующую страницу назначения и отдельную кнопку администратора, если
-его identity явно разрешена.
-
-## Оценки и обновления
-
-Worker каждого профиля читает фактические native результаты своей delivery,
-сохраняет observation/outbox и отправляет AGS score только в соответствующий
-lineitem. Повторная отправка после сбоя не создаёт другую пользовательскую
-identity. Подготовка новой immutable delivery одного курса описана
-[в текущей инструкции Platform](https://github.com/Afonenko-Course-Tools/prairielearn-platform/blob/v2.0.0/docs/proxmox-pilot.md).
-Замена delivery **в том же instance** несовместима с его существующими
-назначениями: Gateway требует explicit delivery migration и не переписывает
-их автоматически. Если вместо согласованной миграции выбирается изолированное
-новое состояние, нужна свежая SQLite schema5. Такая замена БД перестаёт
-распознавать прежние `GatewaySession`: сохранение signing key не сохраняет
-session bearer, и потребуется новый подписанный Moodle launch.
-
-Для нового semester можно подготовить **новый native course и отдельный
-instance**, например `2026-2027-s1`, затем переключить существующий профиль на
-его verified delivery и согласованную native bridge binding. Сохраняются
-существующая SQLite schema5, routePrefix, HTTPS origin, LTI registration и
-activity bindings, signing/handoff/bridge keys, tokens и TLS certificates.
-Неистёкшие `GatewaySession` и CSRF продолжают распознаваться в той же БД и
-cookie path; обычный TTL и одноразовость handoff/state остаются прежними.
-Bootstrap зачисляет в новый instance, а прежние native enrollment/attempts
-и назначения старого instance не изменяются. В частности, новое назначение
-того же студента создаётся отдельно, без копирования старой defense row.
-Это новый scope, а не перенос состояния между delivery внутри старого instance.
-
-Перед переключением проверьте exact delivery/native IDs и complete grading
-receipt, отсутствие незавершённого AGS send и сохранность старых строк.
-Один worker профиля остаётся единственным writer его Moodle lineitem;
-параллельный второй профиль с тем же LTI resource tuple запрещён. Старые
-observations/outbox не становятся оценками нового instance. Проверка
-`test_new_instance_preserves_session_csrf_and_old_assignment_only_with_same_database`
-покрывает локальные HTTP/session/assignment границы; настоящий Moodle launch,
-native submission и AGS readback проверяются отдельно. Другой профиль сохраняет
-свою delivery и БД.
-
-При совместной приёмке двух курсов проверьте подписанные launches для нескольких Student identities и преподавателя: общую учётную запись и отдельные зачисления, запрет Student admin и чужих attempts, реальные текстовые native submissions и независимые AGS результаты. Выполнение обязательных позиций проверяется отдельно от взвешенной native оценки. Эта проверка не подтверждает настройки Moodle учреждения.
+Native PL sessions, grants и logout принадлежат PL. Gateway не хранит часовой
+SSO, registry пользователей, работы или оценки и не перевыдаёт handoff через home.

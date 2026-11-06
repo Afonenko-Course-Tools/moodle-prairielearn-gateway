@@ -1,158 +1,80 @@
+"""Закрытая серверная конфигурация адаптера входа."""
 from pathlib import Path
-from typing import Literal
 from urllib.parse import urlsplit
-import json
-import re
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from .errors import GatewayError
-from . import delivery_v4
+
 
 class Closed(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra='forbid', strict=True, frozen=True)
+
 
 def origin(value):
-    parsed=urlsplit(value)
-    if parsed.scheme!="https" or not parsed.netloc or parsed.username or parsed.password or parsed.fragment: raise ValueError("Fixed HTTPS origin required")
-    return parsed.scheme,parsed.netloc
+    parsed = urlsplit(value)
+    if parsed.scheme != 'https' or not parsed.netloc or parsed.username or parsed.password or parsed.fragment:
+        raise ValueError('Требуется фиксированный HTTPS origin')
+    return parsed.scheme, parsed.netloc
+
 
 class Activity(Closed):
-    kind: Literal["defense","lab","catalog"]
-    resourceLinkId: str = Field(min_length=1,max_length=256)
-    lineitem: str | None = None
-    workId: str | None = None
+    resourceLinkId: str = Field(min_length=1, max_length=256)
+
 
 class Registration(Closed):
     issuer: str
-    clientId: str = Field(min_length=1,max_length=256)
-    deploymentId: str = Field(min_length=1,max_length=256)
-    contextId: str = Field(min_length=1,max_length=256)
+    clientId: str = Field(min_length=1, max_length=256)
+    deploymentId: str = Field(min_length=1, max_length=256)
+    contextId: str = Field(min_length=1, max_length=256)
     authUrl: str
     jwksUrl: str
     privateJwksUrl: str | None = None
-    tokenUrl: str | None = None
-    activities: dict[str, Activity]
-    @model_validator(mode="after")
+    activities: dict[str, Activity] = Field(min_length=1)
+
+    @model_validator(mode='after')
     def trusted_urls(self):
-        expected=origin(self.issuer)
-        if any(origin(v)!=expected for v in (self.authUrl,self.jwksUrl,self.tokenUrl) if v is not None): raise ValueError("Registration URL origin mismatch")
+        expected = origin(self.issuer)
+        if any(origin(v) != expected for v in (self.authUrl, self.jwksUrl)):
+            raise ValueError('Origin регистрации не совпадает')
         if self.privateJwksUrl is not None:
-            mapped=urlsplit(self.privateJwksUrl);public=urlsplit(self.jwksUrl)
-            if mapped.scheme!="http" or mapped.hostname!="moodle" or mapped.port not in (None,80) or mapped.username or mapped.password or mapped.path!=public.path or mapped.query or mapped.fragment:
-                raise ValueError("Only fixed private Moodle JWKS transport mapping is allowed")
-        if not self.activities or len({v.resourceLinkId for v in self.activities.values()})!=len(self.activities): raise ValueError("Unique activity bindings required")
-        if sum(v.kind=="defense" for v in self.activities.values())>1: raise ValueError("At most one defense lineitem required")
-        for activity in self.activities.values():
-            if activity.lineitem is not None and origin(activity.lineitem)!=expected or activity.kind=="lab" and not activity.workId or activity.kind=="defense" and activity.workId or activity.kind=="catalog" and activity.workId is not None: raise ValueError("Fixed AGS activity/work binding required")
+            mapped, public = urlsplit(self.privateJwksUrl), urlsplit(self.jwksUrl)
+            if (mapped.scheme != 'http' or mapped.hostname != 'moodle' or mapped.port not in (None, 80)
+                    or mapped.username or mapped.password or mapped.path != public.path or mapped.query or mapped.fragment):
+                raise ValueError('Разрешён только фиксированный private transport Moodle JWKS')
+        if len({v.resourceLinkId for v in self.activities.values()}) != len(self.activities):
+            raise ValueError('Привязки LTI activity должны быть уникальны')
         return self
 
-class Flow(Closed):
-    mode: Literal["teacher","immediate","approval"]
-    capacity: dict[str,int] = Field(default_factory=dict)
-    @model_validator(mode="after")
-    def limits(self):
-        if any(type(v) is not int or v<1 for v in self.capacity.values()): raise ValueError("Positive explicit capacity required")
-        return self
 
 class Bridge(Closed):
     url: str
     tokenFile: str
-    @model_validator(mode="after")
+
+    @model_validator(mode='after')
     def private_url(self):
-        u=urlsplit(self.url)
-        if u.scheme not in ("http","https") or not u.netloc or u.port!=3001 or u.username or u.password or u.path not in ("","/") or u.query or u.fragment: raise ValueError("Fixed private bridge :3001 origin required")
+        u = urlsplit(self.url)
+        if (u.scheme not in ('http', 'https') or not u.netloc or u.port != 3001 or u.username
+                or u.password or u.path not in ('', '/') or u.query or u.fragment):
+            raise ValueError('Требуется фиксированный private Bridge origin :3001')
         return self
+
 
 class Configuration(Closed):
     publicOrigin: str
     routePrefix: str = Field(pattern=r'^/gateway/courses/[a-z][a-z0-9-]*$')
     database: str
-    privateKeyFile: str
     handoffTokenFile: str
     bridge: Bridge
-    mode: Literal["grading","login-only"] = "grading"
-    courseKey: str | None = Field(default=None,pattern=r"^[a-z][a-z0-9-]*$")
-    deliveryPath: str | None = None
-    instance: str = Field(min_length=1)
+    courseKey: str = Field(pattern=r'^[a-z][a-z0-9-]*$')
+    instance: str = Field(min_length=1, max_length=256)
     registration: Registration
-    flow: Flow | None = None
     caFile: str | None = None
-    pollSeconds: int = Field(default=15,ge=1,le=3600)
-    administratorSubject: str | None = Field(default=None,min_length=1,max_length=512)
-    @model_validator(mode="after")
+
+    @model_validator(mode='after')
     def paths(self):
-        parsed=urlsplit(self.publicOrigin);origin(self.publicOrigin)
-        if parsed.path not in ("","/") or parsed.query: raise ValueError("Public origin must not contain a path/query")
-        if self.mode == "login-only":
-            if self.courseKey is None or self.deliveryPath is not None or self.flow is not None or self.administratorSubject is not None or any(a.kind != "catalog" for a in self.registration.activities.values()):
-                raise ValueError("Login-only requires a courseKey and catalog activities without grading or administrator composition")
-        elif self.deliveryPath is None or self.flow is None or self.courseKey is not None or self.registration.tokenUrl is None or any(a.lineitem is None for a in self.registration.activities.values()):
-            raise ValueError("Grading requires delivery, flow, token URL and AGS activity bindings")
-        for p in (self.database,self.privateKeyFile,self.handoffTokenFile,self.bridge.tokenFile,self.deliveryPath):
-            if p is None: continue
-            if not Path(p).is_absolute(): raise ValueError("Absolute private runtime paths required")
+        parsed = urlsplit(self.publicOrigin)
+        origin(self.publicOrigin)
+        if parsed.path not in ('', '/') or parsed.query:
+            raise ValueError('Public origin не должен содержать path/query')
+        for p in (self.database, self.handoffTokenFile, self.bridge.tokenFile, self.caFile):
+            if p is not None and not Path(p).is_absolute():
+                raise ValueError('Требуются абсолютные private runtime пути')
         return self
-
-def _delivery_bindings(delivery,questions):
-    bindings=delivery['gradingPayloads'];uuids=set()
-    if not isinstance(bindings,dict) or set(bindings)!=set(questions):raise GatewayError('Exact canonical question bindings required')
-    def relative(value):
-        return isinstance(value,str) and bool(value) and not value.startswith('/') and not re.match(r'^[A-Za-z]:',value) and not re.search(r'[\x00-\x1f\x7f]',value) and '\\' not in value and not any(p in ('','.','..') for p in value.split('/'))
-    for binding in bindings.values():
-        if not isinstance(binding,dict) or not {'uuid','grading','submission','sourceRoot'}<=set(binding):raise GatewayError('Canonical grading/submission binding required')
-        grading=binding['grading'];submission=binding['submission']
-        if not isinstance(grading,dict) or set(grading)!={'method'} or grading['method'] not in ('external','mixed','manual'):raise GatewayError('Explicit canonical grading method required')
-        manual=grading['method']=='manual';fields={'uuid','grading','submission','sourceRoot'}|(set() if manual else {'projectCheck','runtime','sources'})
-        if set(binding)!=fields or not relative(binding['sourceRoot']):raise GatewayError('Closed method-specific question binding required')
-        if not isinstance(binding['uuid'],str) or not re.fullmatch(r'[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}',binding['uuid']) or binding['uuid'] in uuids:raise GatewayError('Unique native UUIDs required')
-        uuids.add(binding['uuid'])
-        if not isinstance(submission,dict) or not {'mode'}<=set(submission) or set(submission)-{'mode','aceMode','layout'} or submission['mode'] not in ('editor','upload') or submission['mode']=='upload' and 'aceMode' in submission or manual and submission['mode']!='upload':raise GatewayError('Closed native input contract required')
-        if 'layout' in submission and (submission['mode']!='upload' or submission['layout'] not in ('files','zip','files-or-zip')):raise GatewayError('Invalid native upload layout')
-        if 'aceMode' in submission and (not isinstance(submission['aceMode'],str) or not re.fullmatch(r'ace/mode/[a-z][a-z0-9_]*',submission['aceMode'])):raise GatewayError('Invalid editor language')
-        if not manual:
-            if any(not isinstance(binding[k],str) or not binding[k] for k in ('runtime','projectCheck')) or not isinstance(binding['sources'],list) or not binding['sources']:raise GatewayError('Automatic runtime/source binding required')
-            for source in binding['sources']:
-                if not isinstance(source,dict) or set(source)!={'projectRelativePath','submissionRelativePath'} or not relative(source['projectRelativePath']) or not relative(source['submissionRelativePath']):raise GatewayError('Invalid automatic source binding')
-
-def load_delivery(path, instance):
-    root=Path(path).absolute()
-    if root.resolve(strict=True)!=root or not root.is_dir():raise GatewayError("Real native directory required")
-    delivery=json.loads((root/"delivery.json").read_text())
-    required={"schemaVersion","courseId","bookRoot","questions","gradingPayloads","works","instances","files"}
-    if not isinstance(delivery,dict) or not required<=delivery.keys() or set(delivery)-required-{"candidate"} or type(delivery["schemaVersion"]) is not int or delivery["schemaVersion"]!=5: raise GatewayError("Expected functional native delivery v5")
-    if delivery['schemaVersion']==5:delivery_v4.validate_base(delivery)
-    questions=delivery['questions']
-    if not isinstance(questions,list) or not questions or any(not isinstance(q,str) or not re.fullmatch(re.escape(delivery['courseId'])+r'/exr-[a-z0-9][a-z0-9-]*',q) for q in questions) or len(set(questions))!=len(questions): raise GatewayError('Invalid native question catalog')
-    if delivery['schemaVersion']==5:delivery_v4.validate_bindings(delivery,questions,_delivery_bindings)
-    else:_delivery_bindings(delivery,questions)
-    for name in delivery["files"]:
-        if not delivery_v4.relative(name): raise GatewayError("Unsafe selected native path")
-        file=root/name
-        if file.resolve(strict=True)!=file.absolute() or not file.is_file(): raise GatewayError("Native regular file required")
-    if instance not in delivery["instances"]: raise GatewayError("Instance absent from delivery")
-    works={w["id"]:w for w in delivery["works"]}
-    if len(works)!=len(delivery["works"]) or any(w not in works for w in delivery["instances"][instance]["works"]): raise GatewayError("Ambiguous selected works")
-    for work in works.values():
-        if set(work)-{'id','slots','policy','completion','relatedExercise'} or not {'id','slots','policy','completion'}<=set(work):raise GatewayError('Unsupported v3 work fields')
-        slots=work['slots']
-        if not isinstance(slots,list) or not slots:raise GatewayError('Required native slots')
-        slot_ids=[]; candidates=[]; required_ids=[]
-        for slot in slots:
-            if not isinstance(slot,dict) or set(slot)!={'id','selection','candidates','assignment'}:raise GatewayError('Closed native slots required')
-            prefix=delivery['courseId']+'/'+work['id']+'/'
-            if not isinstance(slot['id'],str) or not slot['id'].startswith(prefix) or slot['id'] in slot_ids:raise GatewayError('Invalid native slot identity')
-            local=slot['id'][len(prefix):];pool=slot['candidates'];assignment=slot['assignment']
-            if not isinstance(pool,list) or not pool or len(set(pool))!=len(pool) or any(q not in questions or q in candidates for q in pool):raise GatewayError('Invalid or repeated native candidate')
-            if slot['selection']=='fixed':
-                if len(pool)!=1 or local!=pool[0].split('/')[-1]:raise GatewayError('Invalid fixed slot')
-            elif slot['selection'] in ('random','choice'):
-                if len(pool)<2 or not re.fullmatch(r'alt-[a-z0-9][a-z0-9-]*',local):raise GatewayError('Invalid random slot')
-            else:raise GatewayError('Unsupported slot selection')
-            if not isinstance(assignment,dict) or not {'requirement','workMode'}<=set(assignment) or set(assignment)-{'requirement','workMode','stage'} or assignment['requirement'] not in ('required','optional') or assignment['workMode'] not in ('individual','pair','group') or 'stage' in assignment and assignment['stage'] not in ('demonstration','classroom','homework'):raise GatewayError('Invalid slot assignment')
-            if slot['selection']=='choice' and assignment['requirement']!='required':raise GatewayError('Choice must be required')
-            slot_ids.append(slot['id']);candidates.extend(pool)
-            if assignment['requirement']=='required':required_ids.append(slot['id'])
-        policy=work['completion']
-        fields={"schemaVersion","mode","source","slotIds","requiredSlotIds","atLeast","fullyCompletedScore"}
-        if set(policy)!=fields or type(policy['schemaVersion']) is not int or policy['schemaVersion']!=2 or policy['mode']!='required-slot-completion' or policy['source']!='per-slot-results-v2' or type(policy['fullyCompletedScore']) is not int or policy['fullyCompletedScore']!=1 or policy['slotIds']!=slot_ids or policy['requiredSlotIds']!=required_ids or type(policy['atLeast']) is not int or not 1<=policy['atLeast']<=len(required_ids):raise GatewayError('Unsupported or unsatisfiable native completion v2')
-        if "relatedExercise" in work and not work.get("policy",{}).get("assignment",{}).get("student-label"): raise GatewayError("Defense lacks native assignment ACL")
-    return delivery

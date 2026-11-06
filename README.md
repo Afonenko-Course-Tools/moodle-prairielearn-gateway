@@ -1,90 +1,94 @@
-# Moodle — PrairieLearn Gateway
+# Вход из Moodle в PrairieLearn
 
-Приватный сервис входа из Moodle в настроенный Native-курс PrairieLearn.
-Регистрация LTI, доверенные адреса, ключи и Native course instance задаются
-оператором. Проверка подписи, одноразовые state/nonce, привязка пользователя и
-защита CSRF сохраняются. Роль преподавателя сама по себе не даёт прав
-администратора PrairieLearn.
+Gateway 3 — небольшой адаптер Moodle LTI 1.3 → штатная сессия PrairieLearn →
+private enrollment. Moodle подтверждает identity и роль курса, PL хранит
+пользователей, длительную сессию, права, работы и оценки. Gateway хранит только
+кратковременные одноразовые попытки входа.
 
-Для Java существующая ссылка Moodle открывает PrairieLearn. Все десять
-лабораторных доступны одновременно, студент переключается между ними сам;
-приём закрывает преподаватель. Каталог не требует заявки, выбора темы,
-подтверждения или ограничения мест. Передача оценок в Moodle и перенос прежних
-баллов не являются обязательными условиями входа.
+## Последовательность входа
 
-## Вход в штатный курс
+1. Moodle открывает `/gateway/lti/login` с точным зарегистрированным
+   `target_link_uri`, либо `/gateway/courses/<key>/lti/login`.
+2. Gateway выдаёт `GatewayLogin`: случайный browser nonce с `Secure`, `HttpOnly`,
+   `SameSite=None`, `Path=/gateway`, сроком 300 секунд. Новый вход в тот же курс
+   отменяет прежнюю попытку; попытки разных курсов независимы.
+3. Moodle подписывает `LtiResourceLinkRequest`. Gateway проверяет RS256, `kid`,
+   issuer/audience/azp, deployment/context/resource/target, state/nonce, сроки и роль.
+   Подтверждённые identity, имя, email, роль, регистрация и native mapping сохраняются
+   в одном неизменяемом snapshot. Email не определяет UID и не объединяет identity.
+4. Redirect `/gateway/courses/<key>/pl/<flow>` обрабатывает private proxy PL.
+   Он однократно получает `{uid,displayName,email:uid,target}` через
+   `/internal/handoff/courses/<key>/<flow>` с Bearer service token и создаёт native
+   PL session. Header имени — `X-Verified-Name-UTF8-B64: v1.<base64url UTF-8>`;
+   также передаются `X-Verified-Uid` и `X-Verified-Target`.
+5. `/gateway/courses/<key>/bootstrap/<flow>` требует точный flow, browser nonce,
+   потреблённый handoff и неизменные регистрацию/native mapping. Попытка атомарно
+   и необратимо потребляется **до** обращения к Bridge. В Bridge идут сохранённые
+   UID, instance, courseKey, role и email. После успеха браузер переходит к
+   `/pl/course_instance/<id>/assessments`.
 
-Основной пример [config/courses.example.json](config/courses.example.json)
-использует явный `mode: login-only` и `courseKey`. Он сохраняет существующие
-issuer/client/deployment/context/resourceLinkId и прежний UID. `activities`
-содержит только `catalog`; `deliveryPath`, `flow` и `administratorSubject`
-не задаются. `registration.tokenUrl` и `lineitem` не нужны. Если эти URL
-сохранены в конфигурации, проверка доверенного origin продолжает действовать.
+Попытка живёт не более 300 секунд; handoff/bootstrap — не более 60 секунд после
+launch и не дольше попытки. Launch/bootstrap/error callbacks не выставляют и не
+удаляют cookie: поздний ответ не может стереть credential нового входа. Два
+`GatewayLogin` в Cookie header отклоняются без потребления flow. Просроченные
+данные удаляются ограниченными порциями при auth операциях; фонового worker нет.
 
-После подписанного входа студент и преподаватель проходят одноразовую native
-авторизацию и зачисление. Приватный Bridge подтверждает выбранные `userUid`,
-`instance`, `courseKey` и возвращает строго проверяемый путь
-`/pl/course_instance/<числовой id>/assessments`. Gateway открывает штатный
-список курса; свои страницы работ, назначения, административный grant и
-опрос оценок в этом режиме не создаются. Gateway передаёт Bridge только
-проверенные role/email исходной сессии. По приватной политике Bridge выбранный
-владелец получает глобальные права администратора независимо от Learner/Instructor.
-Для остальных пользователей Instructor даёт преподавательские права выбранного
-курса, Learner — Student. `ownerEmail`
-задаётся только в Bridge. UID от email не зависит; отсутствующий или
-недоверенный email не даёт повышения по адресу владельца.
+После успеха остаётся штатная PL session. Home не перевыдаёт handoff. Logout PL
+не позволяет восстановить сессию по прежнему flow или старым Gateway cookies.
+Новый явный переход из Moodle разрешён: logout PL не является logout Moodle.
+Timeout, cancellation, ошибка или неизвестный исход Bridge не возвращают flow
+в оборот; нужен новый переход из Moodle. Автоматических retries и rollback native
+account/session/grants нет.
 
-Подробности договора, миграции и границ приёмки —
-[docs/login-only.md](docs/login-only.md). Сохранённый режим `grading`
-(также режим по умолчанию для прежних конфигураций) показан в
-[config/courses.grading.example.json](config/courses.grading.example.json).
+## Конфигурация и запуск
 
-## Договор поставки режима grading
+Требуется Python 3.14 и существующие зависимости из `requirements.lock`.
+Пример двух курсов — [config/courses.example.json](config/courses.example.json).
+Скопируйте его **вне репозитория**, задайте реальные server-owned registration,
+routePrefix, courseKey, instance и отдельный **новый** database path каждого курса.
+У курсов общий HTTPS origin и handoff token; DB, LTI resource и native mapping
+не должны пересекаться.
 
-Reader принимает `delivery.json` версии 5: идентификатор курса, вопросы,
-типизированные `project` / `native-answer` / `workspace` bindings, работы,
-экземпляры курса и выбранные относительные пути `files`. В Bridge запрос
-передаёт `courseKey`, равный существующему `delivery.courseId`, и `instance`.
-Это выбор настроенного курса; обновление содержимого не меняет его идентичность.
-Для `submission.mode: upload` поддерживается явный `layout`: `files`, `zip`
-или `files-or-zip`. В `editor` и `workspace` это поле недопустимо.
-Native UUID, пользователь, попытка и настоящие ссылки на задания проверяются
-по назначению. Пути с выходом из каталога, символические ссылки и неоднозначные
-слоты отклоняются.
-
-В поставке нет собственных content SHA, source/check/scenario inventories или
-итогового receipt допуска. Путь монтирования задаётся конфигурацией без SHA-суффикса.
-Обычные Git, OCI, package и криптографические механизмы входа сохраняются.
-
-Текущая SQLite схема — версия 5. При первом открытии распознанной версии 3
-или 4 Gateway атомарно сохраняет все строки и добавляет nullable `sessions.email`.
-Для версии 3 также разрешается отсутствие `sessions.lineitem`. Исторические
-сессии получают `email: null`, без повышения прав по адресу владельца.
-Завершённая миграция сохраняет старые state, sessions, handoffs и историю
-оценивания. Неизвестные версии и несовместимая форма таблиц отклоняются.
-Чтение старых собственных форматов поставки не поддерживается. Перед изменением
-рабочей среды требуется отдельная интеграционная приёмка.
-
-## Локальная проверка и запуск
-
-Используйте отдельное окружение Python 3.14 и закреплённые зависимости:
+Нужны два service token файла (не менее 32 печатных ASCII символов), доступ к
+Moodle JWKS и private Bridge `:3001`; для локального CA задайте `caFile`.
+`privateJwksUrl` допускает только фиксированный HTTP transport на `moodle` с тем же
+path, сохраняя публичный Moodle issuer. Он не меняет зарегистрированную identity.
 
 ```sh
-python3.14 -m venv /private/gateway-venv
-/private/gateway-venv/bin/python -m pip install --no-deps -r requirements-dev.lock
-/private/gateway-venv/bin/python -m pytest tests -q
+python3.14 -m pip install --no-deps -r requirements.lock
+python3.14 tools/run-gateway.py --config /absolute/private/runtime.json
 ```
 
-Пример настройки нескольких курсов — [config/courses.example.json](config/courses.example.json).
-Секреты, пользовательские данные и SQLite хранятся вне Git. Сервис запускается
-через `tools/run-gateway.py --config /private/runtime.json` на приватном порту
-18080 за доверенным HTTPS-прокси. Для контейнера служит
-[compose/compose.gateway.yml](compose/compose.gateway.yml); TLS-проверка включена.
+Команда запрещает DB и service tokens внутри репозитория. Пример private Compose
+service находится в `compose/compose.gateway.yml`; конфигурацию proxy и deployment
+ведёт владелец стенда. Публичные заголовки identity не заменяют private service
+authentication. Штатные native cookies выставляет PL; Gateway не выставляет
+`pl2_pre_auth_url`.
 
-[Вход](spec/launch.md), [административные назначения](spec/assignment.md),
-[результаты](spec/results.md), [несколько курсов](docs/two-courses.md),
-[локальное доверие TLS](docs/local-tls.md). Сохранённые административные
-возможности не добавляют обязательных действий в маршрут Java.
+Tool signing key, `privateKeyFile`, tool JWKS endpoint, AGS, delivery, portal,
+assignments, capacity/approval, administrator override и grading workers отсутствуют.
+Исходящий launch подписывает Moodle; потребители tool signing key в отключённых
+AGS/client_assertion/deep-linking сценариях этому приложению не нужны. Прежние
+private key файлы сохраняются. Удаление stale tool-JWKS URL из регистрации Moodle
+выполняется отдельно штатной настройкой без смены issuer/clientId/deploymentId/sub.
 
-Тесты используют вымышленные учётные записи, локальные SQLite и HTTP-транспорты.
-Они не подтверждают авторизацию в настоящем Moodle, AGS или рабочую публикацию.
+Контракт Bridge описан в [spec/launch.md](spec/launch.md), переход со старой БД —
+в [docs/migration.md](docs/migration.md), два курса — в
+[docs/two-courses.md](docs/two-courses.md), локальный TLS — в
+[docs/local-tls.md](docs/local-tls.md).
+
+## Проверка
+
+```sh
+python3.14 -m pip install --no-deps -r requirements-dev.lock
+python3.14 -m pytest -q
+```
+
+Синтетические проверки используют настоящие RSA-подписи LTI, временные SQLite и
+HTTP transport без внешней сети. Проверки реального Moodle, proxy/native PL,
+браузерных cookies и устройств выполняются отдельно на стенде. Локальный pytest
+не подтверждает готовность такого развёртывания.
+
+Ручной release workflow собирает wheel и стандартный OCI image из проверенного
+version tag. Самописного release receipt или хеша исходников нет. Запуск workflow
+и публикация образов не являются частью локальной проверки.
