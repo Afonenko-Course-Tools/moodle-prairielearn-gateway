@@ -90,7 +90,7 @@ docker compose -f /absolute/moodle/compose.yml \
 запрос Moodle с проверкой сертификата и имени. Простая проверка из браузера этого
 не доказывает. Логи диагностики не должны содержать пароли, OAuth токены или ключи.
 
-## Gateway, адреса и ключи
+## Gateway, адреса и подпись Moodle
 
 Для Python Gateway задайте `config.caFile` и смонтируйте соответствующий публичный
 CA/bundle в этот путь, например `/run/tls/ca.crt`; контейнер должен читать файл.
@@ -110,9 +110,10 @@ CA/bundle в этот путь, например `/run/tls/ca.crt`; контей
 `localhost` на компьютеры студентов и не предполагаете, что доверенный CA
 исправляет несовпадение SAN.
 
-JWK/JWKS ключ инструмента LTI проверяет подпись сообщений; CA TLS проверяет сервер
-HTTPS. Это разные ключи и разные контракты; приватный JWK не импортируется в
-хранилище доверенных CA.
+Moodle подписывает исходящий LTI launch; Gateway получает публичный Moodle JWKS
+и проверяет подпись. Auth-only Gateway не загружает private JWK инструмента и
+не публикует tool JWKS endpoint. TLS CA проверяет HTTPS сервер и остаётся
+отдельной зависимостью. Прежние приватные файлы ключей не удаляются.
 
 См. [Platform: локальное развёртывание и TLS](https://github.com/Afonenko-Course-Tools/prairielearn-platform/blob/feat/local-pilot-20261008/docs/development.md)
 и [студентам Windows/macOS/Linux: доверие CA устройств](https://github.com/BSU-RFCT-Afonenko-Courses/Java/blob/codex/windows-device-ca/docs/student-device-certificates.md).

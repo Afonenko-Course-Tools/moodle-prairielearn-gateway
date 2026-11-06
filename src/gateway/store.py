@@ -1,48 +1,44 @@
-from contextlib import contextmanager
+"""Кратковременные попытки входа; постоянной identity/session registry нет."""
+from contextlib import closing, contextmanager
+from dataclasses import asdict, dataclass
 from pathlib import Path
+import fcntl
 import hashlib
 import json
 import secrets
 import sqlite3
 import time
-import math
-from decimal import Decimal
 from .errors import LaunchError, GatewayError
-import fcntl
+
 
 def digest(value):
     if not isinstance(value, str):
         value = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(value.encode()).hexdigest()
 
-def native_digest(value):
-    """Owner wire format: scalar-sorted keys, UTF-8, ECMAScript JSON numbers.
 
-    Keep identity digest separate: its established compact JSON tuple uses ASCII
-    escaping, as the verified Moodle identity spike does.
-    """
-    def canonical(item):
-        if isinstance(item,dict):
-            return "{"+",".join(json.dumps(key,ensure_ascii=False)+":"+canonical(item[key]) for key in sorted(item))+"}"
-        if isinstance(item,list):return "["+",".join(map(canonical,item))+"]"
-        if type(item) is float:
-            if not math.isfinite(item):raise ValueError("Non-finite native JSON")
-            if item==0:return "0"
-            shortest=repr(item)
-            if 1e-6<=abs(item)<1e21:
-                text=format(Decimal(shortest),"f")
-                return text.rstrip("0").rstrip(".") if "." in text else text
-            mantissa,exponent=shortest.split("e")
-            exponent=int(exponent)
-            return mantissa.rstrip("0").rstrip(".")+"e"+("+" if exponent>=0 else "-")+str(abs(exponent))
-        return json.dumps(item,ensure_ascii=False,allow_nan=False,separators=(",",":"))
-    return hashlib.sha256(canonical(value).encode()).hexdigest()
+@dataclass(frozen=True)
+class VerifiedLaunch:
+    uid: str
+    name: str
+    role: str
+    email: str | None
+    subject: str
+    registration: str
+    context: str
+    resource: str
+    activity: str
+    targetLinkUri: str
+    courseKey: str
+    instance: str
+    bootstrapTarget: str
+
 
 class Store:
     @staticmethod
     def _enable_wal(db):
-        # Concurrent first opens can fail this PRAGMA without honoring SQLite's
-        # busy handler. Retry only lock contention within the normal 15s budget.
+        # При первом открытии PRAGMA может проигнорировать busy handler SQLite.
+        # Повторяем только lock contention в пределах штатных 15 секунд.
         deadline = time.monotonic() + 15
         try:
             while True:
@@ -60,41 +56,60 @@ class Store:
             db.execute("PRAGMA busy_timeout=15000")
 
     def __init__(self, path):
-        self.path = Path(path)
-        self.gateway_prefix = '/gateway'
+        self.path = Path(path).absolute()
+        lock_path = self.path.with_suffix(self.path.suffix + '.startup-lock')
+        if self.path.exists():
+            # Первый процесс может ещё создавать схему. Чужую БД проверяем
+            # до writable connection/WAL/chmod и даже создания lock файла.
+            if lock_path.exists():
+                with lock_path.open('r') as lock:
+                    fcntl.flock(lock, fcntl.LOCK_SH)
+                    self._validate_existing()
+            else:
+                self._validate_existing()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        # Serialize first creation across processes. Existing databases are opened
-        # read-only and validated before a writable SQLite connection or WAL.
-        with self.path.with_suffix(self.path.suffix+'.startup-lock').open('a') as lock:
-            fcntl.flock(lock,fcntl.LOCK_EX)
-            existing=self.path.exists()
+        with lock_path.open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            existing = self.path.exists()
             if existing:
-                try:
-                    with sqlite3.connect(self.path.as_uri()+'?mode=ro',uri=True) as check:
-                        versions=[row[0] for row in check.execute('SELECT version FROM schema_versions')]
-                        if versions!=[3] or [row[1] for row in check.execute('PRAGMA table_info(native_attempts)')]!=['scope','version','instance','delivery','work','attempt_id','attempt_number','selection']:raise GatewayError('Unsupported Gateway database schema; create a fresh v3 database')
-                except sqlite3.DatabaseError as error:raise GatewayError('Unsupported Gateway database schema') from error
-            with self.connect() as db:
+                self._validate_existing()
+            with closing(self.connect()) as db:
                 self._enable_wal(db)
                 if not existing:
-                    schema=Path(__file__).resolve().parents[2]/'schema/runtime.sql'
-                    if not schema.exists():schema=Path(__import__('sys').prefix)/'share/moodle-prairielearn-gateway/schema/runtime.sql'
+                    schema = Path(__file__).resolve().parents[2] / 'schema/runtime.sql'
+                    if not schema.exists():
+                        schema = Path(__import__('sys').prefix) / 'share/moodle-prairielearn-gateway/schema/runtime.sql'
                     db.executescript(schema.read_text())
-
         self.path.chmod(0o600)
+
+    def _validate_existing(self):
+        try:
+            # mode=ro всё ещё может создавать/менять WAL shared-memory файлы.
+            # Проверяем только неизменяемую схему main DB без WAL/SHM. Первая
+            # инициализация закрывает connection под startup lock и сохраняет
+            # схему в main DB; runtime больше не меняет её. Сами попытки из WAL
+            # читаются штатным connect только после этого preflight.
+            with closing(sqlite3.connect(self.path.as_uri() + '?mode=ro&immutable=1', uri=True)) as db:
+                tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                columns = [r[1] for r in db.execute('PRAGMA table_info(auth_attempts)')]
+                if (tables != {'auth_schema', 'auth_attempts'}
+                        or list(db.execute('SELECT version FROM auth_schema')) != [(1,)]
+                        or columns != ['state_hash', 'nonce', 'browser_hash', 'expires', 'phase', 'launch_json', 'flow_hash', 'handoff_expires']):
+                    raise GatewayError('Нужна новая auth DB; прежняя БД не изменена')
+        except sqlite3.DatabaseError as error:
+            raise GatewayError('Нужна новая auth DB; прежняя БД не изменена') from error
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=15)
         db.row_factory = sqlite3.Row
-        db.execute("PRAGMA foreign_keys=ON")
-        db.execute("PRAGMA busy_timeout=15000")
+        db.execute('PRAGMA busy_timeout=15000')
         return db
 
     @contextmanager
     def transaction(self):
         db = self.connect()
         try:
-            db.execute("BEGIN IMMEDIATE")
+            db.execute('BEGIN IMMEDIATE')
             yield db
             db.commit()
         except BaseException:
@@ -103,70 +118,68 @@ class Store:
         finally:
             db.close()
 
+    @staticmethod
+    def _cleanup(db, now):
+        db.execute('DELETE FROM auth_attempts WHERE state_hash IN (SELECT state_hash FROM auth_attempts WHERE expires<=? LIMIT 100)', (now,))
+
     def state(self, binding, now):
         state, nonce = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         with self.transaction() as db:
-            db.execute("INSERT INTO login_states(token_hash,nonce,binding,expires) VALUES(?,?,?,?)", (digest(state), nonce, digest(binding), now+300))
-        return {"state": state, "nonce": nonce}
+            self._cleanup(db, now)
+            db.execute('DELETE FROM auth_attempts WHERE browser_hash=?', (digest(binding),))
+            db.execute('INSERT INTO auth_attempts(state_hash,nonce,browser_hash,expires) VALUES(?,?,?,?)',
+                       (digest(state), nonce, digest(binding), now + 300))
+        return {'state': state, 'nonce': nonce}
 
     def pending(self, state, binding, now):
-        with self.connect() as db:
-            row = db.execute("SELECT * FROM login_states WHERE token_hash=?", (digest(state),)).fetchone()
-        if not row or row["consumed"] or row["expires"] <= now or not secrets.compare_digest(row["binding"], digest(binding)):
-            raise LaunchError("State binding/TTL/replay rejected")
+        with self.transaction() as db:
+            self._cleanup(db, now)
+            row = db.execute('SELECT * FROM auth_attempts WHERE state_hash=?', (digest(state),)).fetchone()
+        if not row or row['phase'] != 0 or row['expires'] <= now or not secrets.compare_digest(row['browser_hash'], digest(binding)):
+            raise LaunchError('Отклонены state, browser credential, срок или повторный запуск')
         return dict(row)
 
-    def activate(self, state, binding, now, identity):
-        token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+    def activate(self, state, binding, now, identity, registration, course_key, instance, prefix):
+        flow = secrets.token_urlsafe(32)
+        snapshot = VerifiedLaunch(
+            uid=identity['uid'], name=identity['name'], role=identity['role'], email=identity['email'],
+            subject=identity['subject'], registration=json.dumps(registration, sort_keys=True, separators=(',', ':')),
+            context=identity['context'], resource=identity['resource'], activity=identity['activity'],
+            targetLinkUri=registration['targetLinkUri'], courseKey=course_key, instance=instance,
+            bootstrapTarget=prefix + '/bootstrap/' + flow)
         with self.transaction() as db:
-            updated = db.execute("UPDATE login_states SET consumed=1 WHERE token_hash=? AND binding=? AND expires>? AND consumed=0", (digest(state), digest(binding), now)).rowcount
-            if updated != 1: raise LaunchError("Launch replay rejected")
-            db.execute("INSERT INTO users(id,issuer,client,deployment,subject,uid,name) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name", tuple(identity[k] for k in ("userId","issuer","client","deployment","subject","uid","name")))
-            db.execute("INSERT INTO sessions VALUES(?,?,?,?,?,?,?,?,?)", (digest(token), identity["userId"], identity["role"], identity["context"], identity["resource"], identity["activity"], identity["lineitem"], now+3600, csrf))
-            if identity["role"]=="student":
-                db.execute("INSERT INTO activity_bindings VALUES(?,?,?,?,?) ON CONFLICT(user_id,activity) DO UPDATE SET context=excluded.context,resource=excluded.resource,lineitem=excluded.lineitem",(identity["userId"],identity["activity"],identity["context"],identity["resource"],identity["lineitem"]))
-        return {**identity, "token": token, "csrf": csrf}
+            self._cleanup(db, now)
+            updated = db.execute('UPDATE auth_attempts SET phase=1,launch_json=?,flow_hash=?,handoff_expires=min(expires,?) '
+                                 'WHERE state_hash=? AND browser_hash=? AND expires>? AND phase=0',
+                                 (json.dumps(asdict(snapshot)), digest(flow), now + 60, digest(state), digest(binding), now)).rowcount
+            if updated != 1:
+                raise LaunchError('Повторный или устаревший LTI запуск')
+        return flow, snapshot
 
-    def session(self, token, now):
-        with self.connect() as db:
-            row = db.execute("SELECT s.*,u.uid,u.subject,u.name,u.issuer,u.client,u.deployment,u.id AS userId FROM sessions s JOIN users u ON u.id=s.user_id WHERE token_hash=? AND expires>?", (digest(token), now)).fetchone()
-        if not row: raise LaunchError("Session absent or expired")
-        return dict(row)
-
-    def handoff(self, session, target, now):
-        who=self.session(session, now)
-        administrator_target=target==self.gateway_prefix+"/administrator-bootstrap" and who["role"]=="teacher"
-        if not (administrator_target or target==self.gateway_prefix+"/bootstrap" or __import__("re").fullmatch(r"/pl/course_instance/[1-9][0-9]*/assessment/[1-9][0-9]*/",target)): raise LaunchError("Unsafe native target")
-        token = secrets.token_urlsafe(32)
+    def consume_handoff(self, flow, now):
         with self.transaction() as db:
-            db.execute("INSERT INTO handoffs(token_hash,session_hash,target,expires) VALUES(?,?,?,?)", (digest(token), digest(session), target, now+60))
-        return token
+            self._cleanup(db, now)
+            row = db.execute('SELECT * FROM auth_attempts WHERE flow_hash=? AND phase=1 AND expires>? AND handoff_expires>?',
+                             (digest(flow), now, now)).fetchone()
+            if not row:
+                raise LaunchError('Handoff отсутствует, просрочен или уже потреблён')
+            snapshot = VerifiedLaunch(**json.loads(row['launch_json']))
+            db.execute('UPDATE auth_attempts SET phase=2 WHERE state_hash=?', (row['state_hash'],))
+        return {'uid': snapshot.uid, 'displayName': snapshot.name, 'email': snapshot.uid, 'target': snapshot.bootstrapTarget}
 
-    def bootstrap_handoff(self, session, administrator, now):
-        who=self.session(session,now)
-        if administrator and who["role"]!="teacher": raise LaunchError("Teacher role required")
-        token=secrets.token_urlsafe(32)
-        target=self.gateway_prefix+("/administrator-bootstrap/" if administrator else "/bootstrap/")+token
+    def consume_bootstrap(self, flow, binding, now, registration, course_key, instance, target):
         with self.transaction() as db:
-            db.execute("INSERT INTO handoffs(token_hash,session_hash,target,expires) VALUES(?,?,?,?)",(digest(token),digest(session),target,now+60))
-        return token,target
-
-    def consume_bootstrap(self, token, session, administrator, now):
-        current=self.session(session,now)
-        target=self.gateway_prefix+("/administrator-bootstrap/" if administrator else "/bootstrap/")+token
-        with self.transaction() as db:
-            row=db.execute("SELECT h.target,h.expires AS handoff_expires,h.consumed,s.*,u.uid,u.subject,u.name,u.issuer,u.client,u.deployment,u.id AS userId FROM handoffs h JOIN sessions s ON s.token_hash=h.session_hash JOIN users u ON u.id=s.user_id WHERE h.token_hash=?",(digest(token),)).fetchone()
-            if not row or row["consumed"]!=1 or row["target"]!=target or row["handoff_expires"]<=now or row["expires"]<=now or row["userId"]!=current["userId"] or row["role"]!=current["role"]:
-                raise LaunchError("Bootstrap binding/TTL/replay rejected")
-            db.execute("UPDATE handoffs SET consumed=2 WHERE token_hash=?",(digest(token),))
-            return dict(row)
-
-    def consume_handoff(self, token, now):
-        with self.transaction() as db:
-            row = db.execute("SELECT h.*,u.uid,u.name,s.role,s.expires AS session_expires FROM handoffs h JOIN sessions s ON s.token_hash=h.session_hash JOIN users u ON u.id=s.user_id WHERE h.token_hash=?", (digest(token),)).fetchone()
-            if not row or row["consumed"] or row["expires"] <= now or row["session_expires"] <= now: raise LaunchError("Handoff replay/TTL rejected")
-            db.execute("UPDATE handoffs SET consumed=1 WHERE token_hash=?", (digest(token),))
-            return {"uid": row["uid"], "displayName": row["name"], "email": row["uid"], "target": row["target"]}
-
-    def audit(self, db, kind, entity, data, now):
-        db.execute("INSERT INTO audit(kind,entity,data,created) VALUES(?,?,?,?)", (kind, entity, json.dumps(data, sort_keys=True), now))
+            self._cleanup(db, now)
+            row = db.execute('SELECT * FROM auth_attempts WHERE flow_hash=? AND browser_hash=? '
+                             'AND phase=2 AND expires>? AND handoff_expires>?',
+                             (digest(flow), digest(binding), now, now)).fetchone()
+            if not row:
+                raise LaunchError('Требуется новый переход из Moodle: flow недействителен')
+            snapshot = VerifiedLaunch(**json.loads(row['launch_json']))
+            # Необратимый consume фиксируется до любого обращения к Bridge.
+            db.execute('UPDATE auth_attempts SET phase=3 WHERE state_hash=?', (row['state_hash'],))
+        current = json.dumps(registration, sort_keys=True, separators=(',', ':'))
+        if (snapshot.registration != current or snapshot.courseKey != course_key or snapshot.instance != instance
+                or snapshot.bootstrapTarget != target):
+            raise LaunchError('Регистрация или курс изменились; повторите переход из Moodle')
+        return snapshot

@@ -1,4 +1,4 @@
-name: Gateway owner tests
+name: Проверки Gateway
 on: [push, pull_request]
 permissions:
   contents: read

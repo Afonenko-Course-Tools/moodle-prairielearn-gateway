@@ -15,24 +15,26 @@ class CoursesConfiguration(Closed):
 
     @model_validator(mode='after')
     def isolated(self):
-        databases=set(); deliveries=set(); origins=set(); activities=set(); client_keys={}
+        databases=set(); origins=set(); activities=set(); native_bindings=set()
         for name, course in self.courses.items():
-            if course.routePrefix != '/gateway/courses/'+name: raise ValueError('Course key must match its fixed route prefix')
+            if course.routePrefix != '/gateway/courses/'+name:
+                raise ValueError('Ключ курса должен совпадать с routePrefix')
             database=str(Path(course.database).resolve())
-            delivery=str(Path(course.deliveryPath).resolve())
-            if database in databases or delivery in deliveries: raise ValueError('Courses require separate database and delivery paths')
-            databases.add(database);deliveries.add(delivery);origins.add(course.publicOrigin.rstrip('/'))
+            binding=(course.instance,course.courseKey)
+            if database in databases or binding in native_bindings:
+                raise ValueError('Курсам нужны отдельные auth DB и native bindings')
+            databases.add(database); native_bindings.add(binding)
+            origins.add(course.publicOrigin.rstrip('/'))
             reg=course.registration
-            scope=(reg.issuer,reg.clientId,reg.deploymentId)
-            key=str(Path(course.privateKeyFile).resolve())
-            if scope in client_keys and client_keys[scope]!=key: raise ValueError('One LTI client must use one signing key')
-            client_keys[scope]=key
             for activity in reg.activities.values():
                 key=(reg.issuer,reg.clientId,reg.deploymentId,reg.contextId,activity.resourceLinkId)
-                if key in activities: raise ValueError('LTI resource cannot belong to two native courses')
+                if key in activities:
+                    raise ValueError('LTI resource не может принадлежать двум native курсам')
                 activities.add(key)
-        if len(origins)!=1: raise ValueError('Courses require one public origin')
-        if len({str(Path(c.handoffTokenFile).resolve()) for c in self.courses.values()})!=1: raise ValueError('Named courses require the shared proxy handoff service token')
+        if len(origins)!=1:
+            raise ValueError('Курсам нужен один public origin')
+        if len({str(Path(c.handoffTokenFile).resolve()) for c in self.courses.values()})!=1:
+            raise ValueError('Курсам нужен общий proxy handoff service token')
         return self
 
 def create_courses_app(config, *, factory=create_app):
@@ -58,9 +60,9 @@ def create_courses_app(config, *, factory=create_app):
     async def shared_login(request:Request):
         params=dict(await request.form()) if request.method=='POST' else dict(request.query_params)
         selected=[name for name,course in config.courses.items() if params.get('target_link_uri')==course.publicOrigin.rstrip('/')+course.routePrefix+'/lti/launch']
-        if len(selected)!=1: raise GatewayError('Unknown registered target',403)
+        if len(selected)!=1: raise GatewayError('Неизвестный зарегистрированный target',403)
         return await children[selected[0]].state.login_handler(request)
     @app.get('/internal/handoff/courses/{unknown}/{token}')
     async def unknown_course(unknown:str,token:str):
-        raise GatewayError('Unknown course handoff',403)
+        raise GatewayError('Неизвестный курс handoff',403)
     return app

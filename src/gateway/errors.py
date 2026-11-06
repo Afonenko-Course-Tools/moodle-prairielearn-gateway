@@ -4,5 +4,5 @@ class GatewayError(Exception):
         self.status = status
 
 class LaunchError(GatewayError):
-    def __init__(self, message="Verified launch/session required"):
+    def __init__(self, message="Требуется подтверждённый переход из Moodle"):
         super().__init__(message, 403)

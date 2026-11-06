@@ -1,127 +1,94 @@
-# moodle-prairielearn-gateway
+# Вход из Moodle в PrairieLearn
 
-Private FastAPI service for verified Moodle LTI 1.3 launches, native Community
-PrairieLearn assignments and Moodle AGS results. It uses joserfc (Authlib JOSE),
-актуальной SQLite схемы and the authenticated Platform bridge. Teacher operations never
-grant PrairieLearn administrator access.
+Gateway 3 — небольшой адаптер Moodle LTI 1.3 → штатная сессия PrairieLearn →
+private enrollment. Moodle подтверждает identity и роль курса, PL хранит
+пользователей, длительную сессию, права, работы и оценки. Gateway хранит только
+кратковременные одноразовые попытки входа.
 
-Install the exact closure in a private Python 3.14 environment, then run the owner
-tests:
+## Последовательность входа
+
+1. Moodle открывает `/gateway/lti/login` с точным зарегистрированным
+   `target_link_uri`, либо `/gateway/courses/<key>/lti/login`.
+2. Gateway выдаёт `GatewayLogin`: случайный browser nonce с `Secure`, `HttpOnly`,
+   `SameSite=None`, `Path=/gateway`, сроком 300 секунд. Новый вход в тот же курс
+   отменяет прежнюю попытку; попытки разных курсов независимы.
+3. Moodle подписывает `LtiResourceLinkRequest`. Gateway проверяет RS256, `kid`,
+   issuer/audience/azp, deployment/context/resource/target, state/nonce, сроки и роль.
+   Подтверждённые identity, имя, email, роль, регистрация и native mapping сохраняются
+   в одном неизменяемом snapshot. Email не определяет UID и не объединяет identity.
+4. Redirect `/gateway/courses/<key>/pl/<flow>` обрабатывает private proxy PL.
+   Он однократно получает `{uid,displayName,email:uid,target}` через
+   `/internal/handoff/courses/<key>/<flow>` с Bearer service token и создаёт native
+   PL session. Header имени — `X-Verified-Name-UTF8-B64: v1.<base64url UTF-8>`;
+   также передаются `X-Verified-Uid` и `X-Verified-Target`.
+5. `/gateway/courses/<key>/bootstrap/<flow>` требует точный flow, browser nonce,
+   потреблённый handoff и неизменные регистрацию/native mapping. Попытка атомарно
+   и необратимо потребляется **до** обращения к Bridge. В Bridge идут сохранённые
+   UID, instance, courseKey, role и email. После успеха браузер переходит к
+   `/pl/course_instance/<id>/assessments`.
+
+Попытка живёт не более 300 секунд; handoff/bootstrap — не более 60 секунд после
+launch и не дольше попытки. Launch/bootstrap/error callbacks не выставляют и не
+удаляют cookie: поздний ответ не может стереть credential нового входа. Два
+`GatewayLogin` в Cookie header отклоняются без потребления flow. Просроченные
+данные удаляются ограниченными порциями при auth операциях; фонового worker нет.
+
+После успеха остаётся штатная PL session. Home не перевыдаёт handoff. Logout PL
+не позволяет восстановить сессию по прежнему flow или старым Gateway cookies.
+Новый явный переход из Moodle разрешён: logout PL не является logout Moodle.
+Timeout, cancellation, ошибка или неизвестный исход Bridge не возвращают flow
+в оборот; нужен новый переход из Moodle. Автоматических retries и rollback native
+account/session/grants нет.
+
+## Конфигурация и запуск
+
+Требуется Python 3.14 и существующие зависимости из `requirements.lock`.
+Пример двух курсов — [config/courses.example.json](config/courses.example.json).
+Скопируйте его **вне репозитория**, задайте реальные server-owned registration,
+routePrefix, courseKey, instance и отдельный **новый** database path каждого курса.
+У курсов общий HTTPS origin и handoff token; DB, LTI resource и native mapping
+не должны пересекаться.
+
+Нужны два service token файла (не менее 32 печатных ASCII символов), доступ к
+Moodle JWKS и private Bridge `:3001`; для локального CA задайте `caFile`.
+`privateJwksUrl` допускает только фиксированный HTTP transport на `moodle` с тем же
+path, сохраняя публичный Moodle issuer. Он не меняет зарегистрированную identity.
 
 ```sh
-python3.14 -m venv /private/gateway-venv
-/private/gateway-venv/bin/python -m pip install --no-deps -r requirements-dev.lock
-/private/gateway-venv/bin/python -m pip check
-/private/gateway-venv/bin/python -m pytest tests -q
+python3.14 -m pip install --no-deps -r requirements.lock
+python3.14 tools/run-gateway.py --config /absolute/private/runtime.json
 ```
 
-Copy `config/courses.example.json` into a private runtime directory and replace
-the fixed registration, activity and native-delivery bindings. Unknown fields are
-rejected. The instance comes from the installed exporter delivery; each lab has
-its own registered Moodle resource/lineitem/work. Exactly one defense activity
-receives the current assigned variant. Capacity defaults to unlimited.
+Команда запрещает DB и service tokens внутри репозитория. Пример private Compose
+service находится в `compose/compose.gateway.yml`; конфигурацию proxy и deployment
+ведёт владелец стенда. Публичные заголовки identity не заменяют private service
+authentication. Штатные native cookies выставляет PL; Gateway не выставляет
+`pl2_pre_auth_url`.
 
-Run `tools/run-gateway.py --config /private/runtime.json`. The service listens on
-private port 18080; only the trusted HTTPS proxy exposes `/gateway/`. Use
-`compose/compose.gateway.yml` for the private container with UID/GID 1000,
-read-only source/config/delivery mounts and a writable SQLite volume. Set
-`GATEWAY_PRIVATE`, `GATEWAY_DELIVERY` and `GATEWAY_DATA` to absolute private paths.
-Secret files and the database directory must be readable/writable by UID 1000 as
-appropriate (files 0600, data directory 0700); no public service port is published.
-Mount a trusted CA at `/run/tls/ca.crt`; TLS verification remains enabled.
+Tool signing key, `privateKeyFile`, tool JWKS endpoint, AGS, delivery, portal,
+assignments, capacity/approval, administrator override и grading workers отсутствуют.
+Исходящий launch подписывает Moodle; потребители tool signing key в отключённых
+AGS/client_assertion/deep-linking сценариях этому приложению не нужны. Прежние
+private key файлы сохраняются. Удаление stale tool-JWKS URL из регистрации Moodle
+выполняется отдельно штатной настройкой без смены issuer/clientId/deploymentId/sub.
 
-Protocol and operational contracts: [launch](spec/launch.md),
-[assignment](spec/assignment.md), [results](spec/results.md). The Platform bridge
-owns all native enrollment/label changes and result reads. Gateway stores its
-workflow only. `tools/check-integration.py --database /private/runtime.sqlite`
-reads durable counts without modifying the database; it does not certify live
-Moodle acceptance.
+Контракт Bridge описан в [spec/launch.md](spec/launch.md), переход со старой БД —
+в [docs/migration.md](docs/migration.md), два курса — в
+[docs/two-courses.md](docs/two-courses.md), локальный TLS — в
+[docs/local-tls.md](docs/local-tls.md).
 
-`tests/fixtures/course-gateway/` contains three synthetic Java bank questions,
-60 distinct manual essay declarations and 60 related defenses, plus an ordinary
-lab. Its source explicitly declares three points per question; exporter6 requires
-authored grading values rather than inserting internal defaults. `tools/export-fixture.py --help` exports this source through standard installed
-Core/exporter packages and checks the resulting native inventory. Its generated
-delivery, private grading and evidence stay outside the owner source. Runtime
-keys/users/tokens, native sessions, SQLite data and Moodle receipts stay outside Git.
+## Проверка
 
-The owner tests use synthetic identities and HTTP transports. Actual Student and
-teacher Moodle round trips, native direct-URL denial, restart, course upgrade and
-actual Java numbers/UTF-8 acceptance are separate release gates. Cross-delivery
-assignment migration currently fails closed pending the reviewed explicit
-Platform/Gateway migration workflow; restarting an unchanged delivery preserves
-the persistent assignments, audit and outbox.
-
-Новый native course с отдельным instance можно подключить к существующему
-профилю, сохранив SQLite schema3, routePrefix, регистрацию и ключи. Неистёкшие
-session tokens и CSRF остаются действительными; старые назначения и attempts
-сохраняются в прежнем instance. Это не миграция delivery внутри того же
-instance. Свежая БД утратит распознавание старых cookies. Точная граница и
-проверки описаны в [инструкции обновления](docs/two-courses.md#оценки-и-обновления).
-
-Для локального прототипа: [отдельное доверие TLS в Moodle/PHP, Gateway и браузере](docs/local-tls.md), генерация полного публичного CA bundle и Compose override без изменения томов данных.
-
-## Текущая версия и выпуск
-
-Кандидат 2.2.0 принимает delivery v3 и v4, results/config v2 и БД3 без
-миграций. Reader v4 строго различает `project`, `native-answer` и `workspace`:
-проверяет grading, response slots, digest workspace image, seed и обязательные
-скрытые файлы. Delivery не понижается до v3; назначения, UID, ключи, регистрация,
-cookies и схема SQLite сохраняют прежний контракт. `config/courses.example.json` показывает именованные курсы. Каждый курс
-имеет собственные delivery и SQLite; вложенные конфиги не содержат schemaVersion.
-Publisher проверяет отсутствие registry tag до push, сохраняет receipt v2 с
-актуальными версиями схем и подтверждает pull фактического digest. Версия готова
-к использованию после публикации образа и полной интеграционной приёмки; локальный
-образ и candidate commit сами по себе не подтверждают выпуск.
-
-Для publisher сначала создаётся draft release существующего проверенного tag.
-После dispatch workflow загружает wheel и receipt в этот release; только после
-проверки assets/digest ROOT публикует immutable release. Уже имеющийся receipt
-запрещает повторную публикацию образа этой версии.
-
-## Несколько курсов и серверный пилот
-
-Общая LTI-регистрация одного Moodle курса и независимые native-курсы описаны
-в [инструкции](docs/two-courses.md). Пример конфигурации —
-[config/courses.example.json](config/courses.example.json).
-
-## Локальный candidate delivery v3
-
-Новый reader принимает только delivery v3 с явными grading/submission bindings всего каталога вопросов. Results остаются `per-slot-results-v2`: один фактический представитель на слот. Для `choice` native bridge проверяет всех кандидатов и выбирает full → score → lexical ID; Gateway закрепляет весь canonical pool этой позиции внутри попытки. Поэтому смена лучшего A→B допустима, но fixed/random по-прежнему закрепляют выбранный вопрос. Чужой представитель и изменение canonical pool отвергаются.
-
-`grading` выбранного представителя блокирует новый FullyGraded event; прежний outbox/опубликованный результат сохраняется. Pending проигрывающей альтернативы не меняет завершённый status победителя. Завершённая partial оценка не равна accepted slot: completion требует score=1 с полными native points. Assignment и lab сохраняют свои прежние шкалы.
-
-Адресные interoperability tests используют `PLATFORM_BRIDGE_POLICY=/absolute/candidate/bridge/policy.mjs` и проверяют фактический Node producer перед Gateway. Без явного пути этот межрепозиторный тест отмечается skipped; обычные reader/attempt/outbox tests исполняются самостоятельно. Эти synthetic tests не подтверждают actual Moodle authentication или UI двух студентов.
-
-## Вход в каталог без передачи оценки
-
-`kind: catalog` открывает существующие «Мои работы» и выбранные обычные работы
-текущего delivery/instance. Он не создаёт назначение защиты и не отправляет AGS:
-ни текущие результаты каталога, ни прежний pending outbox этого activity.
-Существующие sent/pending строки сохраняются; это не перенос старой оценки.
-
-Пример внутренней привязки (адреса вымышлены):
-
-```json
-"streams": {
-  "kind": "catalog",
-  "resourceLinkId": "existing-resource",
-  "lineitem": "https://moodle.example/lineitems/existing",
-  "workId": null
-}
+```sh
+python3.14 -m pip install --no-deps -r requirements-dev.lock
+python3.14 -m pytest -q
 ```
 
-При смене маршрута прежние resourceLinkId/lineitem и внешняя регистрация остаются
-неизменными. `workId` у catalog запрещён. Студент проходит обычный одноразовый
-handoff, enroll тем же UID и выбирает текущую обычную работу. Преподаватель
-использует существующий преподавательский вход без доступа от имени студента.
-Защиты, выбор/выдача назначений и roster из catalog недоступны.
+Синтетические проверки используют настоящие RSA-подписи LTI, временные SQLite и
+HTTP transport без внешней сети. Проверки реального Moodle, proxy/native PL,
+браузерных cookies и устройств выполняются отдельно на стенде. Локальный pytest
+не подтверждает готовность такого развёртывания.
 
-Это описание source transport, а не разрешение менять production configuration
-или состояние SQLite. Cutover требует отдельной проверки неизвестных/in-flight
-scores, backup/restore и сохранения истории. Реальные проверки Moodle двумя
-студентами и преподавателем остаются отдельным этапом.
-
-Source candidate `2.1.0` добавляет закрытый маршрут catalog. Это подготовленный
-кандидат для отдельного review/CI; публикация версии или Docker image здесь
-не выполнялась.
+Ручной release workflow собирает wheel и стандартный OCI image из проверенного
+version tag. Самописного release receipt или хеша исходников нет. Запуск workflow
+и публикация образов не являются частью локальной проверки.

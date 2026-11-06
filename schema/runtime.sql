@@ -1,60 +1,14 @@
-CREATE TABLE IF NOT EXISTS schema_versions(version INTEGER PRIMARY KEY);
-INSERT OR IGNORE INTO schema_versions VALUES(3);
-CREATE TABLE IF NOT EXISTS login_states(
- token_hash TEXT PRIMARY KEY, nonce TEXT NOT NULL, binding TEXT NOT NULL,
- expires INTEGER NOT NULL, consumed INTEGER NOT NULL DEFAULT 0
+CREATE TABLE auth_schema(version INTEGER PRIMARY KEY CHECK(version=1));
+INSERT INTO auth_schema VALUES(1);
+CREATE TABLE auth_attempts(
+ state_hash TEXT PRIMARY KEY,
+ nonce TEXT NOT NULL,
+ browser_hash TEXT NOT NULL UNIQUE,
+ expires INTEGER NOT NULL,
+ -- 0: OIDC pending; 1: verified; 2: handoff consumed; 3: terminal.
+ phase INTEGER NOT NULL DEFAULT 0 CHECK(phase IN (0,1,2,3)),
+ launch_json TEXT,
+ flow_hash TEXT UNIQUE,
+ handoff_expires INTEGER
 );
-CREATE TABLE IF NOT EXISTS users(
- id TEXT PRIMARY KEY, issuer TEXT NOT NULL, client TEXT NOT NULL, deployment TEXT NOT NULL,
- subject TEXT NOT NULL, uid TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
- UNIQUE(issuer,client,deployment,subject)
-);
-CREATE TABLE IF NOT EXISTS sessions(
- token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
- role TEXT NOT NULL CHECK(role IN ('student','teacher')), context TEXT NOT NULL,
- resource TEXT NOT NULL, activity TEXT NOT NULL, lineitem TEXT NOT NULL,
- expires INTEGER NOT NULL, csrf TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS handoffs(
- token_hash TEXT PRIMARY KEY, session_hash TEXT NOT NULL REFERENCES sessions(token_hash),
- target TEXT NOT NULL, expires INTEGER NOT NULL, consumed INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS assignments(
- id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), instance TEXT NOT NULL,
- delivery TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 0, work TEXT, essay TEXT,
- old_work TEXT, state TEXT NOT NULL, desired_state TEXT NOT NULL,
- context TEXT NOT NULL, resource TEXT NOT NULL, lineitem TEXT NOT NULL,
- updated INTEGER NOT NULL, UNIQUE(user_id,instance)
-);
-CREATE TABLE IF NOT EXISTS requests(
- id TEXT PRIMARY KEY, assignment_id TEXT NOT NULL REFERENCES assignments(id),
- user_id TEXT NOT NULL REFERENCES users(id), idempotency TEXT NOT NULL,
- body_hash TEXT NOT NULL, work TEXT NOT NULL, essay TEXT NOT NULL, state TEXT NOT NULL,
- created INTEGER NOT NULL, UNIQUE(user_id,idempotency)
-);
-CREATE TABLE IF NOT EXISTS audit(
- id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, entity TEXT NOT NULL,
- data TEXT NOT NULL, created INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS observations(
- event_id TEXT PRIMARY KEY, assignment_id TEXT NOT NULL, version INTEGER NOT NULL,
- attempt_number INTEGER NOT NULL, data TEXT NOT NULL, created INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS outbox(
- id TEXT PRIMARY KEY, assignment_id TEXT NOT NULL, version INTEGER NOT NULL,
- user_id TEXT NOT NULL REFERENCES users(id), context TEXT NOT NULL, resource TEXT NOT NULL,
- delivery TEXT NOT NULL, lineitem TEXT NOT NULL, payload TEXT NOT NULL,
- state TEXT NOT NULL DEFAULT 'pending', tries INTEGER NOT NULL DEFAULT 0,
- next_attempt INTEGER NOT NULL DEFAULT 0, lease_until INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS activity_bindings(
- user_id TEXT NOT NULL REFERENCES users(id), activity TEXT NOT NULL,
- context TEXT NOT NULL, resource TEXT NOT NULL, lineitem TEXT NOT NULL,
- PRIMARY KEY(user_id,activity)
-);
-CREATE TABLE native_attempts(
- scope TEXT NOT NULL, version INTEGER NOT NULL, instance TEXT NOT NULL,
- delivery TEXT NOT NULL, work TEXT NOT NULL, attempt_id TEXT NOT NULL,
- attempt_number INTEGER NOT NULL, selection TEXT NOT NULL,
- PRIMARY KEY(scope,version,attempt_number), UNIQUE(scope,version,attempt_id)
-);
+CREATE INDEX auth_attempts_expiry ON auth_attempts(expires);
