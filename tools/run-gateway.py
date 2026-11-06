@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Запуск private Gateway ASGI с закрытой серверной конфигурацией."""
 import argparse
-import json
 import os
 from pathlib import Path
 import sys
@@ -9,15 +8,20 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"src"))
 import uvicorn
 from gateway.courses import CoursesConfiguration, create_courses_app
 
-def main():
+class Arguments(argparse.Namespace):
+    config: Path
+    host: str
+    port: int
+
+
+def main() -> None:
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--config",type=Path,required=True)
     p.add_argument("--host",default="0.0.0.0")
     p.add_argument("--port",type=int,default=18080)
-    args=p.parse_args()
+    args=p.parse_args(namespace=Arguments())
     os.umask(0o077)
-    value=json.loads(args.config.read_text())
-    config=CoursesConfiguration.model_validate(value)
+    config=CoursesConfiguration.model_validate_json(args.config.read_text())
     repo=Path(__file__).resolve().parents[1]
     for course in config.courses.values():
         for path in (course.database,course.handoffTokenFile,course.bridge.tokenFile):
