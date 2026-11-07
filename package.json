@@ -1,0 +1,10 @@
+{
+  "name": "moodle-prairielearn-gateway-ci",
+  "private": true,
+  "scripts": {
+    "check:types": "pyright --project pyrightconfig.json"
+  },
+  "devDependencies": {
+    "pyright": "1.1.414"
+  }
+}

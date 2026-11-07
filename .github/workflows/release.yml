@@ -18,22 +18,31 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        id: python
         with:
           python-version: '3.14'
       - name: Проверить Git tag и версию пакета
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: python tools/validate-release.py
-      - name: Проверить и собрать пакет
+      - name: Установить и проверить зависимости Python
         run: |
           python -m pip install --no-deps -r requirements-dev.lock
           python -m pip install setuptools==82.0.1
           python -m pip check
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts
+      - run: npm run check:types -- --pythonpath "${{ steps.python.outputs.python-path }}"
+      - name: Проверить и собрать пакет
+        run: |
           python -m pytest tests -q
           python -m pip wheel --no-deps --no-build-isolation . --wheel-dir dist
       - name: Определить имя образа

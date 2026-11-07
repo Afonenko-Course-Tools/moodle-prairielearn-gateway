@@ -13,3 +13,4 @@ _extensions/
 runtime.json
 *-token
 *-private-key.json
+node_modules/
