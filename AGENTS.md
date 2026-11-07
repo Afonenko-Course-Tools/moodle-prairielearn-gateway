@@ -9,8 +9,10 @@ JDK25 или новее. Проверки в настоящем Moodle отно�
 
 Для общей программы Java и System Practice разрешены только `gpt-6.1-sol`
 и `gpt-6.1-terra` с явно назначенным `reasoning_effort`. Единственный норматив
-ролей и границ — [общая матрица](https://github.com/BSU-RFCT-Afonenko-Courses/Java/blob/main/docs/agent-execution-proposal-20261029.md);
+ролей и границ — [общая матрица](https://github.com/BSU-RFCT-Afonenko-Courses/Java/blob/master/docs/agent-execution-proposal-20261029.md);
 старые назначения других моделей не применяются.
+
+По прямому [решению 84](https://github.com/BSU-RFCT-Afonenko-Courses/Java/blob/master/docs/refactoring-plan.md#decision-84) на этапе планирования разрешён `gpt-6.1-sol` с `reasoning_effort="ultra"` без повторного согласования. Это включает исследование текущего состояния, анализ требований и архитектуры, подготовку плана и координацию этого исследования. Для реализации, интеграции, выпуска и независимой рецензии действуют назначения соответствующих ролей [общей матрицы](https://github.com/BSU-RFCT-Afonenko-Courses/Java/blob/master/docs/agent-execution-proposal-20261029.md); усилие планирования автоматически на них не переносится.
 
 Координатор — Sol/high; устойчивое ограниченное техническое исполнение —
 Sol/medium, критичные границы — Sol/high. Учебный автор и независимый
@@ -21,7 +23,7 @@ Sol/medium, критичные границы — Sol/high. Учебный ав�
 `gpt-6.1-sol`, Terra — `gpt-6.1-terra`; автор не принимает собственную работу.
 
 До роли обязателен собственный первичный допуск по
-[переносимой процедуре](https://github.com/BSU-RFCT-Afonenko-Courses/Java/blob/main/docs/model-admission.md):
+[переносимой процедуре](https://github.com/BSU-RFCT-Afonenko-Courses/Java/blob/master/docs/model-admission.md):
 сохраните собственные ID чата и исходного хода, проверьте верхние и вложенные
 model/effort. После возобновления и перед приёмкой проверяйте весь интервал
 от того же исходного хода; без подтверждения роль останавливается.
