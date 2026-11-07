@@ -1,9 +1,15 @@
+from pathlib import Path
 """Проверки одноразового входа на реальных подписанных LTI сообщениях."""
 import asyncio
 import copy
-import json
 import sqlite3
 from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator
+from typing import TypedDict, Unpack
+from fastapi import FastAPI
+from gateway.contracts import Enrollment, EnrollmentClient, Handoff, Jwks, Role
+from pydantic import TypeAdapter
+from payloads import Payload
 import httpx
 import pytest
 from joserfc import jwt
@@ -14,47 +20,62 @@ from gateway.errors import GatewayError
 from gateway.launch import LTI, LEARNER, INSTRUCTOR
 
 PREFIX='/gateway/courses/demo'
+HANDOFF = TypeAdapter(Handoff)
+
+
+def handoff_value(response: httpx.Response) -> Handoff:
+    return HANDOFF.validate_json(response.content, strict=True)
+
+
 UID='gw-9ad555084e0e7c714ab30ad1f034099644cc0b334cd655fc26740205e39e818f@example.invalid'
 
 
-def configuration(tmp_path):
-    return {'publicOrigin':'https://course.example','routePrefix':PREFIX,'database':str(tmp_path/'auth.sqlite'),
+def configuration(tmp_path: Path) -> Payload:
+    return Payload({'publicOrigin':'https://course.example','routePrefix':PREFIX,'database':str(tmp_path/'auth.sqlite'),
             'handoffTokenFile':'/private/handoff',
             'bridge':{'url':'http://prairielearn:3001','tokenFile':'/private/bridge'},'courseKey':'demo','instance':'pilot',
             'registration':{'issuer':'https://moodle.example','clientId':'client','deploymentId':'deploy','contextId':'context',
                             'authUrl':'https://moodle.example/auth','jwksUrl':'https://moodle.example/certs',
-                            'activities':{'catalog':{'resourceLinkId':'resource'}}}}
+                            'activities':{'catalog':{'resourceLinkId':'resource'}}}})
 
 
 class Platform:
-    def __init__(self):
+    def __init__(self) -> None:
         self.key=RSAKey.generate_key(parameters={'kid':'moodle-test'})
-        self.calls=[]
-        self.failure=None
-        self.entered=None
-        self.release=None
-        self.bridge=self
-    async def jwks(self):return {'keys':[self.key.as_dict(private=False)]}
-    async def enroll(self,uid,instance,course,*,role,email):
-        self.calls.append((uid,instance,course,role,email))
+        self.calls: list[tuple[str, str, str, Role, str | None]] = []
+        self.failure: Exception | None = None
+        self.entered: asyncio.Event | None = None
+        self.release: asyncio.Event | None = None
+        self.bridge: EnrollmentClient = self
+    async def jwks(self) -> Jwks: return Jwks(keys=[self.key.as_dict(private=False)])
+    async def enroll(self, uid: str, instance: str, course: str, *, role: object, email: object) -> Enrollment:
+        if role == 'student':
+            confirmed_role: Role = 'student'
+        elif role == 'teacher':
+            confirmed_role = 'teacher'
+        else:
+            raise AssertionError('Требуется подтверждённая роль тестового запуска')
+        assert email is None or isinstance(email, str)
+        self.calls.append((uid,instance,course,confirmed_role,email))
         if self.entered:
             self.entered.set()
+            assert self.release is not None
             await self.release.wait()
         if self.failure:raise self.failure
-        return {'schemaVersion':1,'userUid':uid,'instance':instance,'courseKey':course,'enrolled':True,'path':'/pl/course_instance/42/assessments'}
+        return Enrollment(schemaVersion=1,userUid=uid,instance=instance,courseKey=course,enrolled=True,path='/pl/course_instance/42/assessments')
 
 
 @asynccontextmanager
-async def browser_for(app):
+async def browser_for(app: FastAPI) -> AsyncGenerator[httpx.AsyncClient]:
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url='https://course.example') as browser:yield browser
 
 
-async def begin(browser,platform,*,prefix=PREFIX,role=LEARNER,email=None,name='Участник',sub='student-a',login_path=None):
+async def begin(browser: httpx.AsyncClient, platform: Platform, *, prefix: str = PREFIX, role: str = LEARNER, email: object = None, name: str = 'Участник', sub: str = 'student-a', login_path: str | None = None) -> tuple[httpx.Response, dict[str, str]]:
     target='https://course.example'+prefix+'/lti/launch'
     opened=await browser.get(login_path or prefix+'/lti/login',params={'iss':'https://moodle.example','target_link_uri':target,'login_hint':'hint','lti_message_hint':'message'})
     assert opened.status_code==303
     oidc=httpx.URL(opened.headers['location']).params
-    claims={'iss':'https://moodle.example','aud':'client','sub':sub,'iat':990,'exp':1100,'nonce':oidc['nonce'],
+    claims: dict[str, object] = {'iss':'https://moodle.example','aud':'client','sub':sub,'iat':990,'exp':1100,'nonce':oidc['nonce'],
             LTI+'deployment_id':'deploy',LTI+'context':{'id':'context'},LTI+'resource_link':{'id':'resource'},
             LTI+'roles':[role],LTI+'message_type':'LtiResourceLinkRequest',LTI+'version':'1.3.0',LTI+'target_link_uri':target,'name':name}
     if email is not None:claims['email']=email
@@ -62,7 +83,16 @@ async def begin(browser,platform,*,prefix=PREFIX,role=LEARNER,email=None,name='�
     return opened,body
 
 
-async def activate(browser,platform,**kwargs):
+class LaunchOptions(TypedDict, total=False):
+    prefix: str
+    role: str
+    email: object
+    name: str
+    sub: str
+    login_path: str | None
+
+
+async def activate(browser: httpx.AsyncClient, platform: Platform, **kwargs: Unpack[LaunchOptions]) -> tuple[httpx.Response, httpx.Response, str]:
     opened,body=await begin(browser,platform,**kwargs)
     launched=await browser.post(kwargs.get('prefix',PREFIX)+'/lti/launch',data=body)
     assert launched.status_code==303
@@ -70,12 +100,12 @@ async def activate(browser,platform,**kwargs):
     return opened,launched,flow
 
 
-async def handoff(browser,flow,prefix=PREFIX):
+async def handoff(browser: httpx.AsyncClient, flow: str, prefix: str = PREFIX) -> httpx.Response:
     return await browser.get('/internal/handoff'+prefix.removeprefix('/gateway')+'/'+flow,headers={'Authorization':'Bearer '+'h'*32,'Cookie':'GatewayLogin='+browser.cookies['GatewayLogin']})
 
 
 @pytest.mark.anyio
-async def test_only_login_sets_one_shared_nonce_and_callbacks_never_mutate_it(tmp_path):
+async def test_only_login_sets_one_shared_nonce_and_callbacks_never_mutate_it(tmp_path: Path) -> None:
     platform=Platform();app=create_app(configuration(tmp_path),clients=platform,clock=lambda:1000);app.state.handoff_secret='h'*32
     async with browser_for(app) as browser:
         opened,launched,flow=await activate(browser,platform)
@@ -85,22 +115,22 @@ async def test_only_login_sets_one_shared_nonce_and_callbacks_never_mutate_it(tm
         assert 'set-cookie' not in launched.headers
         private=await handoff(browser,flow)
         assert private.status_code==200 and 'set-cookie' not in private.headers
-        assert private.json()['uid']==UID and private.json()['email']==UID
-        boot=await browser.get(private.json()['target'])
+        assert handoff_value(private)['uid']==UID and handoff_value(private)['email']==UID
+        boot=await browser.get(handoff_value(private)['target'])
         assert boot.status_code==303 and 'set-cookie' not in boot.headers
-        assert (await browser.get(private.json()['target'])).status_code==403
+        assert (await browser.get(handoff_value(private)['target'])).status_code==403
         assert (await browser.get(PREFIX+'/')).status_code==404
         assert len(platform.calls)==1
 
 
 @pytest.mark.anyio
-async def test_success_or_failed_bridge_cannot_reissue_handoff_from_home(tmp_path):
+async def test_success_or_failed_bridge_cannot_reissue_handoff_from_home(tmp_path: Path) -> None:
     platform=Platform();platform.failure=GatewayError('Тестовая ошибка',503)
     app=create_app(configuration(tmp_path),clients=platform,clock=lambda:1000);app.state.handoff_secret='h'*32
     async with browser_for(app) as browser:
         _,_,flow=await activate(browser,platform)
         private=await handoff(browser,flow)
-        target=private.json()['target']
+        target=handoff_value(private)['target']
         assert (await browser.get(target)).status_code==503
         assert (await browser.get(target)).status_code==403
         assert (await browser.get(PREFIX+'/')).status_code==404
@@ -109,7 +139,7 @@ async def test_success_or_failed_bridge_cannot_reissue_handoff_from_home(tmp_pat
 
 @pytest.mark.anyio
 @pytest.mark.parametrize('field',['instance','courseKey'])
-async def test_restart_mapping_change_rejects_saved_launch_before_bridge(tmp_path,field):
+async def test_restart_mapping_change_rejects_saved_launch_before_bridge(tmp_path: Path,field: str) -> None:
     cfg=configuration(tmp_path);platform=Platform()
     app=create_app(cfg,clients=platform,clock=lambda:1000);app.state.handoff_secret='h'*32
     async with browser_for(app) as browser:
@@ -120,18 +150,18 @@ async def test_restart_mapping_change_rejects_saved_launch_before_bridge(tmp_pat
     restarted=create_app(changed,clients=platform,clock=lambda:1001)
     async with browser_for(restarted) as browser:
         browser.cookies.update(cookies)
-        assert (await browser.get(private.json()['target'])).status_code==403
+        assert (await browser.get(handoff_value(private)['target'])).status_code==403
     assert platform.calls==[]
 
 
-def test_auth_database_has_no_registry_or_legacy_tables(tmp_path):
+def test_auth_database_has_no_registry_or_legacy_tables(tmp_path: Path) -> None:
     store=Store(tmp_path/'fresh.sqlite')
     with store.connect() as db:
         tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert 'users' not in tables and 'sessions' not in tables and 'assignments' not in tables
 
 
-def test_legacy_database_is_refused_without_mutation(tmp_path):
+def test_legacy_database_is_refused_without_mutation(tmp_path: Path) -> None:
     path=tmp_path/'old.sqlite'
     with sqlite3.connect(path) as db:db.executescript("CREATE TABLE schema_versions(version INTEGER PRIMARY KEY); INSERT INTO schema_versions VALUES(5); CREATE TABLE users(id TEXT PRIMARY KEY,uid TEXT); INSERT INTO users VALUES('old','preserved');")
     path.chmod(0o640)
@@ -142,20 +172,20 @@ def test_legacy_database_is_refused_without_mutation(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_new_login_invalidates_exact_old_flow_even_for_same_user(tmp_path):
+async def test_new_login_invalidates_exact_old_flow_even_for_same_user(tmp_path: Path) -> None:
     platform=Platform();app=create_app(configuration(tmp_path),clients=platform,clock=lambda:1000);app.state.handoff_secret='h'*32
     async with browser_for(app) as browser:
         _,_,old=await activate(browser,platform,email='old@example.invalid')
-        old_target=(await handoff(browser,old)).json()['target']
+        old_target=handoff_value(await handoff(browser,old))['target']
         _,_,new=await activate(browser,platform,email='new@example.invalid')
         assert (await browser.get(old_target)).status_code==403
         private=await handoff(browser,new)
-        assert (await browser.get(private.json()['target'])).status_code==303
+        assert (await browser.get(handoff_value(private)['target'])).status_code==303
         assert platform.calls[0][-1]=='new@example.invalid' and len(platform.calls)==1
 
 
 @pytest.mark.anyio
-async def test_late_launch_callback_cannot_replace_current_browser_credential(tmp_path):
+async def test_late_launch_callback_cannot_replace_current_browser_credential(tmp_path: Path) -> None:
     platform=Platform();app=create_app(configuration(tmp_path),clients=platform,clock=lambda:1000);app.state.handoff_secret='h'*32
     async with browser_for(app) as browser:
         _,old_body=await begin(browser,platform)
@@ -163,16 +193,16 @@ async def test_late_launch_callback_cannot_replace_current_browser_credential(tm
         late=await browser.post(PREFIX+'/lti/launch',data=old_body)
         assert late.status_code==403 and 'set-cookie' not in late.headers
         private=await handoff(browser,new)
-        assert (await browser.get(private.json()['target'])).status_code==303
+        assert (await browser.get(handoff_value(private)['target'])).status_code==303
 
 
 @pytest.mark.anyio
-async def test_bridge_await_consumes_old_attempt_before_new_login(tmp_path):
+async def test_bridge_await_consumes_old_attempt_before_new_login(tmp_path: Path) -> None:
     platform=Platform();platform.entered=asyncio.Event();platform.release=asyncio.Event()
     app=create_app(configuration(tmp_path),clients=platform,clock=lambda:1000);app.state.handoff_secret='h'*32
     async with browser_for(app) as browser:
         _,_,old=await activate(browser,platform)
-        target=(await handoff(browser,old)).json()['target']
+        target=handoff_value(await handoff(browser,old))['target']
         pending=asyncio.create_task(browser.get(target))
         await platform.entered.wait()
         assert (await browser.get(target)).status_code==403
@@ -182,11 +212,11 @@ async def test_bridge_await_consumes_old_attempt_before_new_login(tmp_path):
         assert 'set-cookie' not in late.headers
         private=await handoff(browser,new)
         assert private.status_code==200
-        assert (await browser.get(private.json()['target'])).status_code==303
+        assert (await browser.get(handoff_value(private)['target'])).status_code==303
 
 
 @pytest.mark.anyio
-async def test_duplicate_cookie_cannot_consume_private_handoff(tmp_path):
+async def test_duplicate_cookie_cannot_consume_private_handoff(tmp_path: Path) -> None:
     platform=Platform();app=create_app(configuration(tmp_path),clients=platform,clock=lambda:1000);app.state.handoff_secret='h'*32
     async with browser_for(app) as browser:
         _,_,flow=await activate(browser,platform)
@@ -198,18 +228,18 @@ async def test_duplicate_cookie_cannot_consume_private_handoff(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize('field',['issuer','clientId','deploymentId','contextId','resource','activity','target'])
-async def test_restart_registration_change_rejects_saved_launch(tmp_path,field):
+async def test_restart_registration_change_rejects_saved_launch(tmp_path: Path,field: str) -> None:
     cfg=configuration(tmp_path);platform=Platform()
     app=create_app(cfg,clients=platform,clock=lambda:1000);app.state.handoff_secret='h'*32
     async with browser_for(app) as browser:
         _,_,flow=await activate(browser,platform)
-        target=(await handoff(browser,flow)).json()['target'];cookies=browser.cookies
+        target=handoff_value(await handoff(browser,flow))['target'];cookies=browser.cookies
     changed=copy.deepcopy(cfg)
-    if field=='issuer':changed['registration'].update(issuer='https://other.example',authUrl='https://other.example/auth',jwksUrl='https://other.example/certs')
-    elif field=='resource':changed['registration']['activities']['catalog']['resourceLinkId']='replacement'
-    elif field=='activity':changed['registration']['activities']={'replacement':{'resourceLinkId':'resource'}}
+    if field=='issuer':changed.child('registration').update(issuer='https://other.example',authUrl='https://other.example/auth',jwksUrl='https://other.example/certs')
+    elif field=='resource':changed.child('registration').child('activities').child('catalog')['resourceLinkId']='replacement'
+    elif field=='activity':changed.child('registration')['activities']={'replacement':{'resourceLinkId':'resource'}}
     elif field=='target':changed['publicOrigin']='https://other.example'
-    else:changed['registration'][field]='replacement'
+    else:changed.child('registration')[field]='replacement'
     restarted=create_app(changed,clients=platform,clock=lambda:1001)
     async with browser_for(restarted) as browser:
         browser.cookies.update(cookies)
@@ -220,28 +250,31 @@ async def test_restart_registration_change_rejects_saved_launch(tmp_path,field):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize('stage',['launch','bootstrap','login'])
-async def test_duplicate_cookie_is_rejected_without_mutating_current_flow(tmp_path,stage):
+async def test_duplicate_cookie_is_rejected_without_mutating_current_flow(tmp_path: Path,stage: str) -> None:
     platform=Platform();app=create_app(configuration(tmp_path),clients=platform,clock=lambda:1000);app.state.handoff_secret='h'*32
     async with browser_for(app) as browser:
         _,body=await begin(browser,platform)
         nonce=browser.cookies['GatewayLogin']
         headers={'Cookie':'GatewayLogin='+nonce+'; GatewayLogin='+nonce}
+        target: str | None = None
         if stage=='launch':
             denied=await browser.post(PREFIX+'/lti/launch',data=body,headers=headers)
             valid=await browser.post(PREFIX+'/lti/launch',data=body)
         else:
             valid=await browser.post(PREFIX+'/lti/launch',data=body)
             flow=valid.headers['location'].rsplit('/',1)[1]
-            target=(await handoff(browser,flow)).json()['target']
+            target=handoff_value(await handoff(browser,flow))['target']
             if stage=='bootstrap':denied=await browser.get(target,headers=headers)
             else:denied=await browser.get(PREFIX+'/lti/login',headers=headers)
         assert denied.status_code==403 and 'set-cookie' not in denied.headers
         assert valid.status_code==303 and platform.calls==[]
-        if stage!='launch':assert (await browser.get(target)).status_code==303
+        if stage!='launch':
+            assert target is not None
+            assert (await browser.get(target)).status_code==303
 
 
 @pytest.mark.anyio
-async def test_first_parallel_logins_require_the_effective_browser_nonce(tmp_path):
+async def test_first_parallel_logins_require_the_effective_browser_nonce(tmp_path: Path) -> None:
     platform=Platform();app=create_app(configuration(tmp_path),clients=platform,clock=lambda:1000)
     async with browser_for(app) as first, browser_for(app) as second:
         _,old=await begin(first,platform)
@@ -253,7 +286,7 @@ async def test_first_parallel_logins_require_the_effective_browser_nonce(tmp_pat
 
 
 @pytest.mark.anyio
-async def test_wrong_browser_and_unconsumed_handoff_cannot_bootstrap(tmp_path):
+async def test_wrong_browser_and_unconsumed_handoff_cannot_bootstrap(tmp_path: Path) -> None:
     platform=Platform();app=create_app(configuration(tmp_path),clients=platform,clock=lambda:1000);app.state.handoff_secret='h'*32
     async with browser_for(app) as browser, browser_for(app) as foreign:
         _,_,flow=await activate(browser,platform)
@@ -262,45 +295,45 @@ async def test_wrong_browser_and_unconsumed_handoff_cannot_bootstrap(tmp_path):
         private=await handoff(browser,flow)
         assert (await foreign.get(target,headers={'Cookie':'GatewayLogin='+'a'*43})).status_code==403
         assert platform.calls==[]
-        assert (await browser.get(private.json()['target'])).status_code==303
+        assert (await browser.get(handoff_value(private)['target'])).status_code==303
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize('now',[1060,1300])
-async def test_handoff_never_outlives_attempt_or_sixty_seconds(tmp_path,now):
+async def test_handoff_never_outlives_attempt_or_sixty_seconds(tmp_path: Path,now: int) -> None:
     platform=Platform();clock=[1000]
     app=create_app(configuration(tmp_path),clients=platform,clock=lambda:clock[0]);app.state.handoff_secret='h'*32
     async with browser_for(app) as browser:
         _,_,flow=await activate(browser,platform)
-        target=(await handoff(browser,flow)).json()['target']
+        target=handoff_value(await handoff(browser,flow))['target']
         clock[0]=now
         assert (await browser.get(target)).status_code==403 and platform.calls==[]
 
 
 @pytest.mark.anyio
-async def test_late_launch_does_not_extend_original_attempt_ttl(tmp_path):
+async def test_late_launch_does_not_extend_original_attempt_ttl(tmp_path: Path) -> None:
     platform=Platform();clock=[1000]
     app=create_app(configuration(tmp_path),clients=platform,clock=lambda:clock[0]);app.state.handoff_secret='h'*32
     async with browser_for(app) as browser:
         _,body=await begin(browser,platform)
         clock[0]=1290
-        claims=jwt.decode(body['id_token'],platform.key,algorithms=['RS256']).claims
+        claims=Payload.validated(jwt.decode(body['id_token'],platform.key,algorithms=['RS256']).claims)
         claims.update(iat=1290,exp=1400)
         body['id_token']=jwt.encode({'alg':'RS256','kid':platform.key.kid},claims,platform.key,algorithms=['RS256'])
         launched=await browser.post(PREFIX+'/lti/launch',data=body)
         flow=launched.headers['location'].rsplit('/',1)[1]
-        target=(await handoff(browser,flow)).json()['target']
+        target=handoff_value(await handoff(browser,flow))['target']
         clock[0]=1300
         assert (await browser.get(target)).status_code==403 and platform.calls==[]
 
 
 @pytest.mark.anyio
-async def test_cancellation_leaves_attempt_consumed_and_new_explicit_launch_works(tmp_path):
+async def test_cancellation_leaves_attempt_consumed_and_new_explicit_launch_works(tmp_path: Path) -> None:
     platform=Platform();platform.entered=asyncio.Event();platform.release=asyncio.Event()
     app=create_app(configuration(tmp_path),clients=platform,clock=lambda:1000);app.state.handoff_secret='h'*32
     async with browser_for(app) as browser:
         _,_,flow=await activate(browser,platform)
-        target=(await handoff(browser,flow)).json()['target']
+        target=handoff_value(await handoff(browser,flow))['target']
         pending=asyncio.create_task(browser.get(target))
         await platform.entered.wait();pending.cancel()
         with pytest.raises(asyncio.CancelledError):await pending
@@ -308,20 +341,20 @@ async def test_cancellation_leaves_attempt_consumed_and_new_explicit_launch_work
         assert len(platform.calls)==1
         platform.entered=None
         _,_,fresh=await activate(browser,platform)
-        fresh_target=(await handoff(browser,fresh)).json()['target']
+        fresh_target=handoff_value(await handoff(browser,fresh))['target']
         assert (await browser.get(fresh_target)).status_code==303
         assert len(platform.calls)==2
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize('role',[LEARNER,INSTRUCTOR])
-async def test_saved_signed_identity_role_email_only_reach_bridge(tmp_path,role):
+async def test_saved_signed_identity_role_email_only_reach_bridge(tmp_path: Path,role: str) -> None:
     platform=Platform();app=create_app(configuration(tmp_path),clients=platform,clock=lambda:1000);app.state.handoff_secret='h'*32
     async with browser_for(app) as browser:
         _,_,flow=await activate(browser,platform,role=role,email=' Owner@Example.Invalid ')
         private=await handoff(browser,flow)
-        assert private.json()=={'uid':UID,'displayName':'Участник','email':UID,'target':PREFIX+'/bootstrap/'+flow}
-        answer=await browser.get(private.json()['target']+'?email=forged@example.invalid&role=Administrator',headers={'X-Gateway-Email':'forged@example.invalid','X-Gateway-Role':'Administrator'})
+        assert handoff_value(private)=={'uid':UID,'displayName':'Участник','email':UID,'target':PREFIX+'/bootstrap/'+flow}
+        answer=await browser.get(handoff_value(private)['target']+'?email=forged@example.invalid&role=Administrator',headers={'X-Gateway-Email':'forged@example.invalid','X-Gateway-Role':'Administrator'})
         assert answer.status_code==303 and answer.headers['location']=='/pl/course_instance/42/assessments'
         assert platform.calls==[(UID,'pilot','demo','teacher' if role==INSTRUCTOR else 'student','owner@example.invalid')]
         for path in ('/','/my/works','/teacher/roster','/administrator-bootstrap','/bootstrap','/.well-known/jwks.json'):
@@ -332,7 +365,7 @@ async def test_saved_signed_identity_role_email_only_reach_bridge(tmp_path,role)
 
 
 @pytest.mark.anyio
-async def test_malformed_duplicate_cookie_does_not_silently_choose_valid_value(tmp_path):
+async def test_malformed_duplicate_cookie_does_not_silently_choose_valid_value(tmp_path: Path) -> None:
     platform=Platform();app=create_app(configuration(tmp_path),clients=platform,clock=lambda:1000)
     async with browser_for(app) as browser:
         _,body=await begin(browser,platform)
@@ -343,7 +376,7 @@ async def test_malformed_duplicate_cookie_does_not_silently_choose_valid_value(t
 
 
 @pytest.mark.anyio
-async def test_restart_keeps_only_exact_transient_flow_until_native_success(tmp_path):
+async def test_restart_keeps_only_exact_transient_flow_until_native_success(tmp_path: Path) -> None:
     cfg=configuration(tmp_path);platform=Platform()
     first=create_app(cfg,clients=platform,clock=lambda:1000);first.state.handoff_secret='h'*32
     async with browser_for(first) as browser:
@@ -357,16 +390,16 @@ async def test_restart_keeps_only_exact_transient_flow_until_native_success(tmp_
         private=await handoff(browser,flow)
         assert private.status_code==200
         assert (await handoff(browser,flow)).status_code==403
-        assert (await browser.get(private.json()['target'])).status_code==303
+        assert (await browser.get(handoff_value(private)['target'])).status_code==303
     after_success=create_app(cfg,clients=platform,clock=lambda:1002)
     async with browser_for(after_success) as browser:
         browser.cookies.update(cookies)
-        assert (await browser.get(private.json()['target'])).status_code==403
+        assert (await browser.get(handoff_value(private)['target'])).status_code==403
         assert (await browser.get(PREFIX+'/')).status_code==404
     assert len(platform.calls)==1
 
 
-def test_expired_attempt_cleanup_is_bounded_and_valid_attempt_survives(tmp_path):
+def test_expired_attempt_cleanup_is_bounded_and_valid_attempt_survives(tmp_path: Path) -> None:
     store=Store(tmp_path/'auth.sqlite')
     for index in range(205):store.state('expired-'+str(index),0)
     valid=store.state('valid',200)
@@ -375,11 +408,11 @@ def test_expired_attempt_cleanup_is_bounded_and_valid_attempt_survives(tmp_path)
     store.pending(valid['state'],'valid',301)
     with store.connect() as db:
         assert db.execute('SELECT count(*) FROM auth_attempts WHERE expires<=301').fetchone()[0]==105
-    assert store.pending(valid['state'],'valid',302)['phase']==0
+    assert store.pending(valid['state'],'valid',302).phase==0
 
 
 @pytest.mark.anyio
-async def test_expired_pending_state_and_old_cookies_cannot_launch(tmp_path):
+async def test_expired_pending_state_and_old_cookies_cannot_launch(tmp_path: Path) -> None:
     platform=Platform();clock=[1000]
     app=create_app(configuration(tmp_path),clients=platform,clock=lambda:clock[0])
     async with browser_for(app) as browser:
@@ -392,11 +425,11 @@ async def test_expired_pending_state_and_old_cookies_cannot_launch(tmp_path):
     assert platform.calls==[]
 
 
-def sqlite_files(directory):
+def sqlite_files(directory: Path) -> dict[str, tuple[bytes, int]]:
     return {p.name:(p.read_bytes(),p.stat().st_mode&0o777) for p in directory.iterdir()}
 
 
-def test_closed_legacy_wal_database_refused_without_creating_sidecars(tmp_path):
+def test_closed_legacy_wal_database_refused_without_creating_sidecars(tmp_path: Path) -> None:
     path=tmp_path/'old.sqlite'
     db=sqlite3.connect(path)
     try:
@@ -412,7 +445,7 @@ def test_closed_legacy_wal_database_refused_without_creating_sidecars(tmp_path):
     assert sqlite_files(tmp_path)==before
 
 
-def test_active_legacy_wal_database_refused_without_changing_existing_sidecars(tmp_path):
+def test_active_legacy_wal_database_refused_without_changing_existing_sidecars(tmp_path: Path) -> None:
     path=tmp_path/'old.sqlite'
     db=sqlite3.connect(path)
     try:
@@ -431,7 +464,7 @@ def test_active_legacy_wal_database_refused_without_changing_existing_sidecars(t
     finally:db.close()
 
 
-def test_auth_database_reopen_retains_pending_state_with_active_wal(tmp_path):
+def test_auth_database_reopen_retains_pending_state_with_active_wal(tmp_path: Path) -> None:
     path=tmp_path/'auth.sqlite';store=Store(path)
     db=store.connect()
     try:
@@ -440,13 +473,13 @@ def test_auth_database_reopen_retains_pending_state_with_active_wal(tmp_path):
         pending=store.state('browser',1000)
         assert (tmp_path/'auth.sqlite-wal').stat().st_size>0
         reopened=Store(path)
-        assert reopened.pending(pending['state'],'browser',1001)['nonce']==pending['nonce']
+        assert reopened.pending(pending['state'],'browser',1001).nonce==pending['nonce']
     finally:db.close()
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize('credential', ['missing', 'wrong-browser', 'duplicate', 'malformed', 'bare-duplicate', 'duplicate-headers', 'wrong-service'])
-async def test_handoff_rejects_unbound_request_before_identity_and_preserves_owner_flow(tmp_path, credential):
+async def test_handoff_rejects_unbound_request_before_identity_and_preserves_owner_flow(tmp_path: Path, credential: str) -> None:
     platform=Platform();app=create_app(configuration(tmp_path),clients=platform,clock=lambda:1000);app.state.handoff_secret='h'*32
     async with browser_for(app) as owner, browser_for(app) as other:
         _,_,flow=await activate(owner,platform)
@@ -461,7 +494,7 @@ async def test_handoff_rejects_unbound_request_before_identity_and_preserves_own
             'wrong-service':'GatewayLogin='+nonce,
             'duplicate-headers':'GatewayLogin='+nonce,
         }
-        headers={'Authorization':'Bearer '+('x'*32 if credential=='wrong-service' else 'h'*32),'Cookie':cookies[credential]}
+        headers: dict[str, str] | list[tuple[str, str]] = {'Authorization':'Bearer '+('x'*32 if credential=='wrong-service' else 'h'*32),'Cookie':cookies[credential]}
         if credential=='duplicate-headers':
             headers=[('Authorization','Bearer '+'h'*32),('Cookie','GatewayLogin='+nonce),('Cookie','GatewayLogin='+nonce)]
         denied=await other.get('/internal/handoff/courses/demo/'+flow,headers=headers)
@@ -472,5 +505,5 @@ async def test_handoff_rejects_unbound_request_before_identity_and_preserves_own
         accepted=await handoff(owner,flow)
         assert accepted.status_code==200 and accepted.headers['x-verified-uid']==UID
         assert (await handoff(owner,flow)).status_code==403
-        assert (await owner.get(accepted.json()['target'])).status_code==303
+        assert (await owner.get(handoff_value(accepted)['target'])).status_code==303
         assert len(platform.calls)==1
