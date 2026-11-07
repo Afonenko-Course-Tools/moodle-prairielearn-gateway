@@ -1,6 +1,10 @@
 """Кратковременные попытки входа; постоянной identity/session registry нет."""
 from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass
+from collections.abc import Generator
+from pydantic import ConfigDict, Field, TypeAdapter
+from typing import ClassVar
+from .contracts import FrozenValue, Handoff, Identity, LaunchRegistration, Pending, Role
 from pathlib import Path
 import fcntl
 import hashlib
@@ -11,7 +15,7 @@ import time
 from .errors import LaunchError, GatewayError
 
 
-def digest(value):
+def digest(value: object) -> str:
     if not isinstance(value, str):
         value = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(value.encode()).hexdigest()
@@ -19,9 +23,10 @@ def digest(value):
 
 @dataclass(frozen=True)
 class VerifiedLaunch:
+    __pydantic_config__: ClassVar[ConfigDict] = ConfigDict(strict=True, extra='forbid')
     uid: str
     name: str
-    role: str
+    role: Role
     email: str | None
     subject: str
     registration: str
@@ -34,9 +39,27 @@ class VerifiedLaunch:
     bootstrapTarget: str
 
 
+SNAPSHOT = TypeAdapter(VerifiedLaunch)
+
+
+class AttemptRow(FrozenValue):
+    state_hash: str
+    nonce: str
+    browser_hash: str
+    expires: int
+    phase: int = Field(ge=0, le=3)
+    launch_json: str | None
+    flow_hash: str | None
+    handoff_expires: int | None
+
+
+def attempt_row(row: sqlite3.Row) -> AttemptRow:
+    return AttemptRow.model_validate(dict(row))
+
+
 class Store:
     @staticmethod
-    def _enable_wal(db):
+    def _enable_wal(db: sqlite3.Connection) -> None:
         # При первом открытии PRAGMA может проигнорировать busy handler SQLite.
         # Повторяем только lock contention в пределах штатных 15 секунд.
         deadline = time.monotonic() + 15
@@ -55,7 +78,7 @@ class Store:
         finally:
             db.execute("PRAGMA busy_timeout=15000")
 
-    def __init__(self, path):
+    def __init__(self, path: str | Path) -> None:
         self.path = Path(path).absolute()
         lock_path = self.path.with_suffix(self.path.suffix + '.startup-lock')
         if self.path.exists():
@@ -82,7 +105,7 @@ class Store:
                     db.executescript(schema.read_text())
         self.path.chmod(0o600)
 
-    def _validate_existing(self):
+    def _validate_existing(self) -> None:
         try:
             # mode=ro всё ещё может создавать/менять WAL shared-memory файлы.
             # Проверяем только неизменяемую схему main DB без WAL/SHM. Первая
@@ -99,14 +122,14 @@ class Store:
         except sqlite3.DatabaseError as error:
             raise GatewayError('Нужна новая auth DB; прежняя БД не изменена') from error
 
-    def connect(self):
+    def connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=15)
         db.row_factory = sqlite3.Row
         db.execute('PRAGMA busy_timeout=15000')
         return db
 
     @contextmanager
-    def transaction(self):
+    def transaction(self) -> Generator[sqlite3.Connection, None, None]:
         db = self.connect()
         try:
             db.execute('BEGIN IMMEDIATE')
@@ -119,10 +142,10 @@ class Store:
             db.close()
 
     @staticmethod
-    def _cleanup(db, now):
+    def _cleanup(db: sqlite3.Connection, now: int) -> None:
         db.execute('DELETE FROM auth_attempts WHERE state_hash IN (SELECT state_hash FROM auth_attempts WHERE expires<=? LIMIT 100)', (now,))
 
-    def state(self, binding, now):
+    def state(self, binding: str, now: int) -> Pending:
         state, nonce = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         with self.transaction() as db:
             self._cleanup(db, now)
@@ -131,21 +154,24 @@ class Store:
                        (digest(state), nonce, digest(binding), now + 300))
         return {'state': state, 'nonce': nonce}
 
-    def pending(self, state, binding, now):
+    def pending(self, state: str, binding: str, now: int) -> AttemptRow:
         with self.transaction() as db:
             self._cleanup(db, now)
             row = db.execute('SELECT * FROM auth_attempts WHERE state_hash=?', (digest(state),)).fetchone()
-        if not row or row['phase'] != 0 or row['expires'] <= now or not secrets.compare_digest(row['browser_hash'], digest(binding)):
+        if row is None:
             raise LaunchError('Отклонены state, browser credential, срок или повторный запуск')
-        return dict(row)
+        pending = attempt_row(row)
+        if pending.phase != 0 or pending.expires <= now or not secrets.compare_digest(pending.browser_hash, digest(binding)):
+            raise LaunchError('Отклонены state, browser credential, срок или повторный запуск')
+        return pending
 
-    def activate(self, state, binding, now, identity, registration, course_key, instance, prefix):
+    def activate(self, state: str, binding: str, now: int, identity: Identity, registration: LaunchRegistration, course_key: str, instance: str, prefix: str) -> tuple[str, VerifiedLaunch]:
         flow = secrets.token_urlsafe(32)
         snapshot = VerifiedLaunch(
             uid=identity['uid'], name=identity['name'], role=identity['role'], email=identity['email'],
-            subject=identity['subject'], registration=json.dumps(registration, sort_keys=True, separators=(',', ':')),
+            subject=identity['subject'], registration=registration.canonical(),
             context=identity['context'], resource=identity['resource'], activity=identity['activity'],
-            targetLinkUri=registration['targetLinkUri'], courseKey=course_key, instance=instance,
+            targetLinkUri=registration.targetLinkUri, courseKey=course_key, instance=instance,
             bootstrapTarget=prefix + '/bootstrap/' + flow)
         with self.transaction() as db:
             self._cleanup(db, now)
@@ -156,18 +182,21 @@ class Store:
                 raise LaunchError('Повторный или устаревший LTI запуск')
         return flow, snapshot
 
-    def consume_handoff(self, flow, binding, now):
+    def consume_handoff(self, flow: str, binding: str, now: int) -> Handoff:
         with self.transaction() as db:
             self._cleanup(db, now)
             row = db.execute('SELECT * FROM auth_attempts WHERE flow_hash=? AND browser_hash=? AND phase=1 AND expires>? AND handoff_expires>?',
                              (digest(flow), digest(binding), now, now)).fetchone()
             if not row:
                 raise LaunchError('Handoff отсутствует, просрочен или уже потреблён')
-            snapshot = VerifiedLaunch(**json.loads(row['launch_json']))
-            db.execute('UPDATE auth_attempts SET phase=2 WHERE state_hash=?', (row['state_hash'],))
+            value = attempt_row(row)
+            if value.launch_json is None:
+                raise LaunchError('Отсутствует подтверждённый snapshot')
+            snapshot = SNAPSHOT.validate_json(value.launch_json, strict=True)
+            db.execute('UPDATE auth_attempts SET phase=2 WHERE state_hash=?', (value.state_hash,))
         return {'uid': snapshot.uid, 'displayName': snapshot.name, 'email': snapshot.uid, 'target': snapshot.bootstrapTarget}
 
-    def consume_bootstrap(self, flow, binding, now, registration, course_key, instance, target):
+    def consume_bootstrap(self, flow: str, binding: str, now: int, registration: LaunchRegistration, course_key: str, instance: str, target: str) -> VerifiedLaunch:
         with self.transaction() as db:
             self._cleanup(db, now)
             row = db.execute('SELECT * FROM auth_attempts WHERE flow_hash=? AND browser_hash=? '
@@ -175,10 +204,13 @@ class Store:
                              (digest(flow), digest(binding), now, now)).fetchone()
             if not row:
                 raise LaunchError('Требуется новый переход из Moodle: flow недействителен')
-            snapshot = VerifiedLaunch(**json.loads(row['launch_json']))
+            value = attempt_row(row)
+            if value.launch_json is None:
+                raise LaunchError('Отсутствует подтверждённый snapshot')
+            snapshot = SNAPSHOT.validate_json(value.launch_json, strict=True)
             # Необратимый consume фиксируется до любого обращения к Bridge.
-            db.execute('UPDATE auth_attempts SET phase=3 WHERE state_hash=?', (row['state_hash'],))
-        current = json.dumps(registration, sort_keys=True, separators=(',', ':'))
+            db.execute('UPDATE auth_attempts SET phase=3 WHERE state_hash=?', (value.state_hash,))
+        current = registration.canonical()
         if (snapshot.registration != current or snapshot.courseKey != course_key or snapshot.instance != instance
                 or snapshot.bootstrapTarget != target):
             raise LaunchError('Регистрация или курс изменились; повторите переход из Moodle')

@@ -2,10 +2,11 @@
 """Build a pinned public CA bundle without changing host trust; Python stdlib + OpenSSL."""
 import argparse, datetime, hashlib, os, re, subprocess, tempfile
 from pathlib import Path
+from typing import NoReturn
 
 PEM = re.compile(rb'-----BEGIN CERTIFICATE-----\s+[A-Za-z0-9+/=\r\n]+-----END CERTIFICATE-----')
-def fail(message): raise ValueError(message)
-def safe_path(value, output=False):
+def fail(message: str) -> NoReturn: raise ValueError(message)
+def safe_path(value: str | Path, output: bool = False) -> Path:
     path=Path(value)
     if '..' in path.parts or output and not path.is_absolute(): fail('Output must be absolute; paths must not contain ..')
     path=path.absolute()
@@ -16,12 +17,12 @@ def safe_path(value, output=False):
     elif not path.is_file(): fail('Input must be a regular public certificate file')
     return path
 
-def openssl(*args, data=None):
+def openssl(*args: str, data: bytes | None = None) -> bytes:
     result=subprocess.run(['openssl',*args],input=data,capture_output=True,env={**os.environ,'LC_ALL':'C'})
     if result.returncode: fail('OpenSSL rejected certificate or signature')
     return result.stdout
 
-def certificates(path, single=False):
+def certificates(path: Path, single: bool = False) -> list[bytes]:
     content=path.read_bytes()
     if b'PRIVATE KEY' in content: fail('Private key material is forbidden')
     blocks=PEM.findall(content)
@@ -30,7 +31,7 @@ def certificates(path, single=False):
     if remainder.strip() or not blocks or single and len(blocks)!=1: fail('Expected '+('one public CA certificate' if single else 'public PEM certificates only'))
     return [openssl('x509','-inform','PEM','-outform','DER',data=block) for block in blocks]
 
-def validated_local(path, pin):
+def validated_local(path: Path, pin: str) -> bytes:
     der=certificates(path,single=True)[0]
     if not re.fullmatch('[0-9a-fA-F]{64}',pin): fail('Expected CA SHA-256 must be 64 hex digits of certificate DER')
     if hashlib.sha256(der).hexdigest()!=pin.lower(): fail('Local CA certificate SHA-256 mismatch')
@@ -48,11 +49,11 @@ def validated_local(path, pin):
     openssl('verify','-no-CAfile','-no-CApath','-trusted',str(path),'-check_ss_sig',str(path))
     return der
 
-def build(public_roots, local_ca, pin, output):
+def build(public_roots: str | Path, local_ca: str | Path, pin: str, output: str | Path) -> tuple[int, bool]:
     roots=safe_path(public_roots); local=safe_path(local_ca); target=safe_path(output,output=True)
     if target in (roots,local): fail('Output must not overwrite an input certificate file')
     all_certs=certificates(roots)+[validated_local(local,pin)]
-    seen=set(); bundle=[]
+    seen: set[bytes] = set(); bundle: list[bytes] = []
     for der in all_certs:
         if der in seen: continue
         seen.add(der); bundle.append(openssl('x509','-inform','DER','-outform','PEM',data=der))
@@ -69,10 +70,17 @@ def build(public_roots, local_ca, pin, output):
         if os.path.exists(name): os.unlink(name)
     return len(bundle),True
 
-def main():
+class Arguments(argparse.Namespace):
+    public_roots: str
+    local_ca: str
+    expected_ca_sha256: str
+    output: str
+
+
+def main() -> None:
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('public-roots','local-ca','expected-ca-sha256','output'): p.add_argument('--'+name,required=True)
-    a=p.parse_args()
+    a=p.parse_args(namespace=Arguments())
     try:
         count,changed=build(a.public_roots,a.local_ca,a.expected_ca_sha256,a.output)
     except (ValueError,OSError) as error: p.exit(1,'CA bundle refused: '+str(error)+'\n')
