@@ -18,6 +18,7 @@ from .store import Store
 from .launch import LaunchService, LaunchError
 from .errors import GatewayError
 from .pl import PLClient
+from .exam import ExamMonitor
 
 def verified_name_header(name: object) -> str:
     """ASCII wire-format подтверждённого имени без изменения signed identity."""
@@ -93,6 +94,7 @@ def create_app(config: object, *, store: Store | None = None, clients: PlatformC
     assert clients is not None
     registration = LaunchRegistration.model_validate({**config.registration.model_dump(), 'targetLinkUri': config.publicOrigin.rstrip('/') + config.routePrefix + '/lti/launch'})
     launch = LaunchService(store, registration, clock, course_key=config.courseKey, instance=config.instance, prefix=config.routePrefix)
+    exam = ExamMonitor(config.examAudit, config.routePrefix) if config.examAudit is not None else None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
@@ -105,6 +107,7 @@ def create_app(config: object, *, store: Store | None = None, clients: PlatformC
     app = GatewayApplication(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
     app.state.handoff_secret = handoff_secret
+    app.state.exam_monitor = exam
 
     @app.exception_handler(GatewayError)
     async def rejected(request: Request, error: Exception) -> JSONResponse:
@@ -143,7 +146,9 @@ def create_app(config: object, *, store: Store | None = None, clients: PlatformC
         params = await request_params(request)
         if set(params) != {'state', 'id_token'}:
             raise LaunchError('Отклонены поля launch')
-        flow, _ = launch.verify(params['state'], binding, params['id_token'], await clients.jwks())
+        flow, who = launch.verify(params['state'], binding, params['id_token'], await clients.jwks())
+        if exam is not None:
+            exam.observe(who, request.headers, int(clock()))
         return RedirectResponse(config.routePrefix + '/pl/' + flow, status_code=303)
 
     @app.get('/internal/handoff' + config.routePrefix.removeprefix('/gateway') + '/{flow}')

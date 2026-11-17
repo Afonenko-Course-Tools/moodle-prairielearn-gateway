@@ -1,5 +1,6 @@
 """Закрытая серверная конфигурация адаптера входа."""
 from pathlib import Path
+import ipaddress
 from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -57,6 +58,46 @@ class Bridge(Closed):
         return self
 
 
+def same_path(first: str, second: str) -> bool:
+    a, b = Path(first), Path(second)
+    if a.resolve() == b.resolve():
+        return True
+    try:
+        return a.samefile(b)
+    except OSError:
+        return False
+
+
+def sqlite_paths(path: str, *, auth: bool = False) -> list[str]:
+    suffixes = ['', '-journal', '-wal', '-shm']
+    if auth:
+        suffixes.append('.startup-lock')
+    return [base + suffix for base in {path, str(Path(path).resolve())} for suffix in suffixes]
+
+
+class ExamAudit(Closed):
+    examId: str = Field(pattern=r'^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+    activities: list[str] = Field(min_length=1)
+    database: str
+    proxyTokenFile: str
+    classroomCidrs: list[str] = Field(min_length=1)
+    restrictLaunchToClassroom: bool = False
+
+    @model_validator(mode='after')
+    def closed_scope(self) -> "ExamAudit":
+        if len(set(self.activities)) != len(self.activities):
+            raise ValueError('Экзаменационные activity должны быть уникальны')
+        if len(set(self.classroomCidrs)) != len(self.classroomCidrs):
+            raise ValueError('Диапазоны экзамена должны быть уникальны')
+        for network in self.classroomCidrs:
+            if '%' in network or '/' not in network:
+                raise ValueError('Требуется CIDR без IPv6 zone')
+            ipaddress.ip_network(network, strict=True)
+        if any(not Path(p).is_absolute() for p in (self.database, self.proxyTokenFile)):
+            raise ValueError('Требуются абсолютные private runtime пути аудита')
+        return self
+
+
 class Configuration(Closed):
     publicOrigin: str
     routePrefix: str = Field(pattern=r'^/gateway/courses/[a-z][a-z0-9-]*$')
@@ -67,6 +108,7 @@ class Configuration(Closed):
     instance: str = Field(min_length=1, max_length=256)
     registration: Registration
     caFile: str | None = None
+    examAudit: ExamAudit | None = None
 
     @model_validator(mode='after')
     def paths(self) -> "Configuration":
@@ -77,4 +119,24 @@ class Configuration(Closed):
         for p in (self.database, self.handoffTokenFile, self.bridge.tokenFile, self.caFile):
             if p is not None and not Path(p).is_absolute():
                 raise ValueError('Требуются абсолютные private runtime пути')
+        if self.examAudit is not None:
+            exam = self.examAudit
+            if not set(exam.activities) <= self.registration.activities.keys():
+                raise ValueError('Экзамен использует только зарегистрированные серверные activity')
+            validate_exam_paths([self])
         return self
+
+
+def validate_exam_paths(courses: list[Configuration]) -> None:
+    auth_paths = [p for course in courses for p in sqlite_paths(course.database, auth=True)]
+    private_files = [p for course in courses for p in
+                     (course.handoffTokenFile, course.bridge.tokenFile, course.caFile) if p is not None]
+    exams = [course.examAudit for course in courses if course.examAudit is not None]
+    all_tokens = [exam.proxyTokenFile for exam in exams]
+    groups = [sqlite_paths(exam.database) for exam in exams]
+    for i, exam in enumerate(exams):
+        reserved = auth_paths + private_files + all_tokens + [p for j, group in enumerate(groups) if i != j for p in group]
+        if any(same_path(path, other) for path in groups[i] for other in reserved):
+            raise ValueError('Audit DB и SQLite sidecar пересекаются с private state')
+        if any(same_path(exam.proxyTokenFile, other) for other in auth_paths + private_files):
+            raise ValueError('Proxy token аудита пересекается с private state')
