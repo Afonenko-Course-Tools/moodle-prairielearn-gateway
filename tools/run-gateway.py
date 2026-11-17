@@ -24,7 +24,10 @@ def main() -> None:
     config=CoursesConfiguration.model_validate_json(args.config.read_text())
     repo=Path(__file__).resolve().parents[1]
     for course in config.courses.values():
-        for path in (course.database,course.handoffTokenFile,course.bridge.tokenFile):
+        paths=[course.database,course.handoffTokenFile,course.bridge.tokenFile]
+        if course.examAudit is not None:
+            paths.extend((course.examAudit.database,course.examAudit.proxyTokenFile))
+        for path in paths:
             if Path(path).resolve().is_relative_to(repo): p.error("Private runtime DB и tokens должны находиться вне репозитория")
     uvicorn.run(create_courses_app(config),host=args.host,port=args.port,proxy_headers=False,access_log=False,server_header=False)
 

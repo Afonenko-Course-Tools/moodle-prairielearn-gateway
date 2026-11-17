@@ -2,8 +2,9 @@
 
 Gateway 3 — небольшой адаптер Moodle LTI 1.3 → штатная сессия PrairieLearn →
 private enrollment. Moodle подтверждает identity и роль курса, PL хранит
-пользователей, длительную сессию, права, работы и оценки. Gateway хранит только
-кратковременные одноразовые попытки входа.
+пользователей, длительную сессию, права, работы и оценки. По умолчанию Gateway хранит
+кратковременные одноразовые попытки входа. Необязательный отдельный
+экзаменационный аудит хранит подтверждённые LTI запуски и адрес сети.
 
 ## Последовательность входа
 
@@ -76,7 +77,8 @@ private key файлы сохраняются. Удаление stale tool-JWKS 
 Контракт Bridge описан в [spec/launch.md](spec/launch.md), переход со старой БД —
 в [docs/migration.md](docs/migration.md), два курса — в
 [docs/two-courses.md](docs/two-courses.md), локальный TLS — в
-[docs/local-tls.md](docs/local-tls.md).
+[docs/local-tls.md](docs/local-tls.md), экзаменационный аудит и ограничение
+нового LTI запуска по CIDR — в [docs/exam-pc-identity.md](docs/exam-pc-identity.md).
 
 ## Проверка
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import Field, model_validator
-from .config import Closed, Configuration
+from .config import Closed, Configuration, validate_exam_paths
 from .errors import GatewayError
 from .app import GatewayApplication, create_app, request_params
 
@@ -38,6 +38,7 @@ class CoursesConfiguration(Closed):
             raise ValueError('Курсам нужен один public origin')
         if len({str(Path(c.handoffTokenFile).resolve()) for c in self.courses.values()})!=1:
             raise ValueError('Курсам нужен общий proxy handoff service token')
+        validate_exam_paths(list(self.courses.values()))
         return self
 
 def create_courses_app(config: object, *, factory: Callable[[Configuration], GatewayApplication] = create_app) -> FastAPI:
