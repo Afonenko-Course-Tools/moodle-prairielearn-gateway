@@ -115,6 +115,7 @@ PRIVATE_CONTROLLER_NETWORKS = tuple(ipaddress.ip_network(network) for network in
 class ExamBinding(Closed):
     controllerOrigin: str
     tokenFile: str
+    proofTokenFile: str
     handoffOrigin: str | None = None
 
     @model_validator(mode='after')
@@ -124,8 +125,8 @@ class ExamBinding(Closed):
             address = ipaddress.ip_address(endpoint.hostname or '')
             if not any(address in network for network in PRIVATE_CONTROLLER_NETWORKS):
                 raise ValueError('HTTP привязки допускается только в закрытой сети')
-        if not Path(self.tokenFile).is_absolute():
-            raise ValueError('Для привязки требуется абсолютный путь private token')
+        if any(not Path(path).is_absolute() for path in (self.tokenFile, self.proofTokenFile)):
+            raise ValueError('Для привязки требуются абсолютные пути private tokens')
         return self
 
 
@@ -175,8 +176,10 @@ def validate_exam_paths(courses: list[Configuration]) -> None:
     all_tokens = [exam.proxyTokenFile for exam in exams]
     groups = [sqlite_paths(exam.database) for exam in exams]
     binding_tokens = [course.examBinding.tokenFile for course in courses if course.examBinding is not None]
+    proof_tokens = [course.examBinding.proofTokenFile for course in courses if course.examBinding is not None]
     reserved_for_tokens = auth_paths + private_files + all_tokens + [path for group in groups for path in group]
-    if any(same_path(token, reserved) for token in binding_tokens for reserved in reserved_for_tokens):
+    if (any(same_path(token, reserved) for token in binding_tokens + proof_tokens for reserved in reserved_for_tokens)
+            or any(same_path(proof, token) for proof in proof_tokens for token in binding_tokens)):
         raise ValueError('Токен привязки пересекается с private state')
     for i, exam in enumerate(exams):
         reserved = auth_paths + private_files + all_tokens + [p for j, group in enumerate(groups) if i != j for p in group]

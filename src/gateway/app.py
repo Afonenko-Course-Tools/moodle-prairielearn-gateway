@@ -19,7 +19,7 @@ from .launch import LaunchService, LaunchError
 from .errors import GatewayError
 from .pl import PLClient
 from .exam import ExamMonitor
-from .binding import BindingReporter, LOGGER as BINDING_LOGGER, WARNING as BINDING_WARNING, certificate_id
+from .binding import BindingReporter, LOGGER as BINDING_LOGGER, WARNING as BINDING_WARNING
 
 def verified_name_header(name: object) -> str:
     """ASCII wire-format подтверждённого имени без изменения signed identity."""
@@ -184,7 +184,7 @@ def create_app(config: object, *, store: Store | None = None, clients: PlatformC
             raise LaunchError('Требуется private service authentication')
         value = store.consume_handoff(flow, binding, int(clock()),
                                       binding_exam=binding_exam,
-                                      binding_cert_id=certificate_id(request.headers) if binding_exam is not None else None)
+                                      binding_cert_id=reporter.certificate_id(request.headers) if reporter is not None else None)
         name = verified_name_header(value['displayName'])
         return JSONResponse(value, headers={'X-Verified-Uid': value['uid'], 'X-Verified-Name-UTF8-B64': name, 'X-Verified-Target': value['target']})
 

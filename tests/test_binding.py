@@ -15,6 +15,7 @@ from test_auth_flow import PREFIX, UID, Platform, activate, browser_for, configu
 
 
 TOKEN = '9' * 64
+PROOF = '8' * 64
 CERT_ID = 'a' * 64 + ':0A'
 EXAM_ID = 'synthetic-exam'
 EXAM_ORIGIN = 'https://course.example:24443'
@@ -27,6 +28,9 @@ def configured(tmp_path: Path) -> Payload:
     binding_token = tmp_path / 'binding-token'
     binding_token.write_text(TOKEN + '\n')
     binding_token.chmod(0o600)
+    proof_token = tmp_path / 'proof-token'
+    proof_token.write_text(PROOF + '\n')
+    proof_token.chmod(0o600)
     proxy_token = tmp_path / 'proxy-token'
     proxy_token.write_text('p' * 32)
     proxy_token.chmod(0o600)
@@ -34,19 +38,21 @@ def configured(tmp_path: Path) -> Payload:
                             'database': str(tmp_path / 'exam.sqlite'), 'proxyTokenFile': str(proxy_token),
                             'classroomCidrs': ['10.0.0.0/8']},
                  examBinding={'controllerOrigin': 'http://controller:8088', 'tokenFile': str(binding_token),
-                              'handoffOrigin': EXAM_ORIGIN})
+                              'proofTokenFile': str(proof_token), 'handoffOrigin': EXAM_ORIGIN})
     return value
 
 
 async def private_handoff(browser: httpx.AsyncClient, flow: str,
-                          proofs: tuple[str, ...] = (CERT_ID,), auth: str = 'h' * 32) -> httpx.Response:
+                          cert_ids: tuple[str, ...] = (CERT_ID,), *, proofs: tuple[str, ...] = (PROOF,),
+                          auth: str = 'h' * 32) -> httpx.Response:
     headers = [('Authorization', 'Bearer ' + auth), ('Cookie', 'GatewayLogin=' + browser.cookies['GatewayLogin'])]
-    headers.extend(('X-Exam-Client-Cert-Id', value) for value in proofs)
+    headers.extend(('X-Exam-Client-Cert-Id', value) for value in cert_ids)
+    headers.extend(('X-Exam-Client-Cert-Proof', value) for value in proofs)
     return await browser.get('/internal/handoff/courses/demo/' + flow, headers=headers)
 
 
 @pytest.mark.anyio
-async def test_reports_only_after_enrollment_and_one_shot_handoff(tmp_path: Path) -> None:
+async def test_reports_only_after_enrollment_and_one_shot_handoff(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     platform = Platform()
     sent: list[httpx.Request] = []
 
@@ -76,11 +82,13 @@ async def test_reports_only_after_enrollment_and_one_shot_handoff(tmp_path: Path
     assert req.headers['authorization'] == 'Bearer ' + TOKEN
     assert req.headers['content-type'] == 'application/json'
     assert json.loads(req.content) == {'examId': EXAM_ID, 'certId': CERT_ID, 'uid': UID, 'student': NAME}
+    assert not [record for record in caplog.records if record.name == 'gateway.binding']
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize('case', ['unscoped', 'teacher', 'blank_name', 'long_name', 'format_name',
-                                 'missing', 'duplicate', 'malformed', 'bridge_failure'])
+                                 'missing', 'duplicate', 'malformed', 'bridge_failure',
+                                 'missing_proof', 'duplicate_proof', 'invalid_proof', 'outbound_bearer_as_proof'])
 async def test_no_report_without_proof_scope_and_successful_bridge(tmp_path: Path, case: str) -> None:
     platform = Platform()
     value = configured(tmp_path)
@@ -102,8 +110,10 @@ async def test_no_report_without_proof_scope_and_successful_bridge(tmp_path: Pat
         _, launch_response, flow = await activate(browser, platform, role=role, name=names.get(case, NAME))
         prefix = '' if case in {'unscoped', 'teacher'} or case in names else EXAM_ORIGIN
         assert launch_response.headers['location'] == prefix + PREFIX + '/pl/' + flow
-        proofs = {'missing': (), 'duplicate': (CERT_ID, CERT_ID), 'malformed': ('b' * 64 + ':ABC',)}.get(case, (CERT_ID,))
-        handoff = await private_handoff(browser, flow, proofs)
+        cert_ids = {'missing': (), 'duplicate': (CERT_ID, CERT_ID), 'malformed': ('b' * 64 + ':ABC',)}.get(case, (CERT_ID,))
+        proofs = {'missing_proof': (), 'duplicate_proof': (PROOF, PROOF), 'invalid_proof': ('7' * 64,),
+                  'outbound_bearer_as_proof': (TOKEN,)}.get(case, (PROOF,))
+        handoff = await private_handoff(browser, flow, cert_ids, proofs=proofs)
         assert handoff.status_code == 200
         bootstrap = await browser.get(handoff_value(handoff)['target'], headers={'X-Exam-Client-Cert-Id': CERT_ID})
         assert bootstrap.status_code == (503 if case == 'bridge_failure' else 303)
@@ -188,5 +198,13 @@ async def test_unavailable_token_keeps_regular_lti(tmp_path: Path) -> None:
 def test_handoff_origin_requires_same_host_different_https_port(tmp_path: Path, origin: str) -> None:
     value = configured(tmp_path)
     value.child('examBinding')['handoffOrigin'] = origin
+    with pytest.raises(ValueError):
+        Configuration.model_validate(value)
+
+
+def test_proof_secret_cannot_share_delivery_token_file(tmp_path: Path) -> None:
+    value = configured(tmp_path)
+    paths = value.child('examBinding')
+    paths['proofTokenFile'] = paths['tokenFile']
     with pytest.raises(ValueError):
         Configuration.model_validate(value)
