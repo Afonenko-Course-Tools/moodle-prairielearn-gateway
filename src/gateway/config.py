@@ -1,7 +1,7 @@
 """Закрытая серверная конфигурация адаптера входа."""
 from pathlib import Path
 import ipaddress
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -98,6 +98,37 @@ class ExamAudit(Closed):
         return self
 
 
+def binding_origin(value: str) -> SplitResult:
+    uri = urlsplit(value)
+    if (uri.scheme not in ('http', 'https') or uri.hostname is None or uri.username is not None
+            or uri.password is not None or uri.path not in ('', '/') or not uri.port
+            or any(ord(char) < 33 or ord(char) > 126 or char in '\\?#' for char in value)):
+        raise ValueError('Требуется origin привязки с явным портом')
+    return uri
+
+
+PRIVATE_CONTROLLER_NETWORKS = tuple(ipaddress.ip_network(network) for network in
+                                    ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16',
+                                     '127.0.0.0/8', 'fc00::/7', '::1/128'))
+
+
+class ExamBinding(Closed):
+    controllerOrigin: str
+    tokenFile: str
+    handoffOrigin: str | None = None
+
+    @model_validator(mode='after')
+    def private_receiver(self) -> 'ExamBinding':
+        endpoint = binding_origin(self.controllerOrigin)
+        if endpoint.scheme == 'http' and endpoint.hostname != 'controller':
+            address = ipaddress.ip_address(endpoint.hostname or '')
+            if not any(address in network for network in PRIVATE_CONTROLLER_NETWORKS):
+                raise ValueError('HTTP привязки допускается только в закрытой сети')
+        if not Path(self.tokenFile).is_absolute():
+            raise ValueError('Для привязки требуется абсолютный путь private token')
+        return self
+
+
 class Configuration(Closed):
     publicOrigin: str
     routePrefix: str = Field(pattern=r'^/gateway/courses/[a-z][a-z0-9-]*$')
@@ -109,6 +140,7 @@ class Configuration(Closed):
     registration: Registration
     caFile: str | None = None
     examAudit: ExamAudit | None = None
+    examBinding: ExamBinding | None = None
 
     @model_validator(mode='after')
     def paths(self) -> "Configuration":
@@ -119,6 +151,14 @@ class Configuration(Closed):
         for p in (self.database, self.handoffTokenFile, self.bridge.tokenFile, self.caFile):
             if p is not None and not Path(p).is_absolute():
                 raise ValueError('Требуются абсолютные private runtime пути')
+        if self.examBinding is not None:
+            if self.examAudit is None:
+                raise ValueError('Привязка требует область examAudit')
+            if self.examBinding.handoffOrigin is not None:
+                handoff = binding_origin(self.examBinding.handoffOrigin)
+                if (handoff.scheme != 'https' or handoff.hostname != parsed.hostname
+                        or handoff.port == (parsed.port or 443)):
+                    raise ValueError('Для handoff требуется HTTPS на прежнем узле и отдельном порту')
         if self.examAudit is not None:
             exam = self.examAudit
             if not set(exam.activities) <= self.registration.activities.keys():
@@ -134,6 +174,10 @@ def validate_exam_paths(courses: list[Configuration]) -> None:
     exams = [course.examAudit for course in courses if course.examAudit is not None]
     all_tokens = [exam.proxyTokenFile for exam in exams]
     groups = [sqlite_paths(exam.database) for exam in exams]
+    binding_tokens = [course.examBinding.tokenFile for course in courses if course.examBinding is not None]
+    reserved_for_tokens = auth_paths + private_files + all_tokens + [path for group in groups for path in group]
+    if any(same_path(token, reserved) for token in binding_tokens for reserved in reserved_for_tokens):
+        raise ValueError('Токен привязки пересекается с private state')
     for i, exam in enumerate(exams):
         reserved = auth_paths + private_files + all_tokens + [p for j, group in enumerate(groups) if i != j for p in group]
         if any(same_path(path, other) for path in groups[i] for other in reserved):

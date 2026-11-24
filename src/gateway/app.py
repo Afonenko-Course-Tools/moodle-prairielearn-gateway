@@ -19,6 +19,7 @@ from .launch import LaunchService, LaunchError
 from .errors import GatewayError
 from .pl import PLClient
 from .exam import ExamMonitor
+from .binding import BindingReporter, LOGGER as BINDING_LOGGER, WARNING as BINDING_WARNING, certificate_id
 
 def verified_name_header(name: object) -> str:
     """ASCII wire-format подтверждённого имени без изменения signed identity."""
@@ -83,7 +84,8 @@ async def request_params(request: Request) -> dict[str, str]:
     return params
 
 
-def create_app(config: object, *, store: Store | None = None, clients: PlatformClients | None = None, clock: Clock = time.time) -> GatewayApplication:
+def create_app(config: object, *, store: Store | None = None, clients: PlatformClients | None = None,
+               clock: Clock = time.time, binding_transport: httpx.AsyncBaseTransport | None = None) -> GatewayApplication:
     if not isinstance(config, Configuration):
         config = Configuration.model_validate(config)
     store = store or Store(config.database)
@@ -95,6 +97,19 @@ def create_app(config: object, *, store: Store | None = None, clients: PlatformC
     registration = LaunchRegistration.model_validate({**config.registration.model_dump(), 'targetLinkUri': config.publicOrigin.rstrip('/') + config.routePrefix + '/lti/launch'})
     launch = LaunchService(store, registration, clock, course_key=config.courseKey, instance=config.instance, prefix=config.routePrefix)
     exam = ExamMonitor(config.examAudit, config.routePrefix) if config.examAudit is not None else None
+    reporter = None
+    if config.examBinding is not None:
+        other_tokens = [value for value in (
+            handoff_secret, owned.bridge.token if owned is not None else None,
+            exam.token.decode('ascii') if exam is not None and exam.token is not None else None,
+        ) if value is not None]
+        try:
+            reporter = BindingReporter(config.examBinding, ca_file=config.caFile, other_tokens=other_tokens,
+                                       transport=binding_transport)
+        except (OSError, ValueError, httpx.InvalidURL):
+            BINDING_LOGGER.warning(BINDING_WARNING)
+    binding_exam = config.examAudit if reporter is not None else None
+    handoff_origin = config.examBinding.handoffOrigin if config.examBinding is not None else None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
@@ -103,6 +118,8 @@ def create_app(config: object, *, store: Store | None = None, clients: PlatformC
         finally:
             if owned is not None:
                 await owned.http.aclose()
+            if reporter is not None:
+                await reporter.http.aclose()
 
     app = GatewayApplication(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
@@ -146,10 +163,14 @@ def create_app(config: object, *, store: Store | None = None, clients: PlatformC
         params = await request_params(request)
         if set(params) != {'state', 'id_token'}:
             raise LaunchError('Отклонены поля launch')
-        flow, who = launch.verify(params['state'], binding, params['id_token'], await clients.jwks())
+        flow, who = launch.verify(params['state'], binding, params['id_token'], await clients.jwks(),
+                                  binding_exam=binding_exam)
         if exam is not None:
             exam.observe(who, request.headers, int(clock()))
-        return RedirectResponse(config.routePrefix + '/pl/' + flow, status_code=303)
+        target = config.routePrefix + '/pl/' + flow
+        if who.bindingExamId is not None and handoff_origin is not None:
+            target = handoff_origin.rstrip('/') + target
+        return RedirectResponse(target, status_code=303)
 
     @app.get('/internal/handoff' + config.routePrefix.removeprefix('/gateway') + '/{flow}')
     async def consume(flow: str, request: Request) -> JSONResponse:
@@ -158,9 +179,12 @@ def create_app(config: object, *, store: Store | None = None, clients: PlatformC
             raise LaunchError('Требуется browser credential')
         credential: object = app.state.handoff_secret
         expected = 'Bearer ' + (credential if isinstance(credential, str) else secrets.token_urlsafe(32))
-        if not secrets.compare_digest(request.headers.get('authorization', ''), expected):
+        credentials = request.headers.getlist('authorization')
+        if len(credentials) != 1 or not secrets.compare_digest(credentials[0].encode(), expected.encode()):
             raise LaunchError('Требуется private service authentication')
-        value = store.consume_handoff(flow, binding, int(clock()))
+        value = store.consume_handoff(flow, binding, int(clock()),
+                                      binding_exam=binding_exam,
+                                      binding_cert_id=certificate_id(request.headers) if binding_exam is not None else None)
         name = verified_name_header(value['displayName'])
         return JSONResponse(value, headers={'X-Verified-Uid': value['uid'], 'X-Verified-Name-UTF8-B64': name, 'X-Verified-Target': value['target']})
 
@@ -171,6 +195,8 @@ def create_app(config: object, *, store: Store | None = None, clients: PlatformC
             raise LaunchError('Требуется новый переход из Moodle')
         who = store.consume_bootstrap(flow, binding, int(clock()), registration, config.courseKey, config.instance, config.routePrefix + '/bootstrap/' + flow)
         answer = await clients.bridge.enroll(who.uid, who.instance, who.courseKey, role=who.role, email=who.email)
+        if reporter is not None and binding_exam is not None:
+            await reporter.report(who, binding_exam)
         return RedirectResponse(answer.path, status_code=303)
 
     return app

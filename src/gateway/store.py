@@ -1,11 +1,12 @@
 """Кратковременные попытки входа; постоянной identity/session registry нет."""
 from contextlib import closing, contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from collections.abc import Generator
 from pydantic import ConfigDict, Field, TypeAdapter
 from typing import ClassVar
 from .contracts import FrozenValue, Handoff, Identity, LaunchRegistration, Pending, Role
 from pathlib import Path
+from .config import ExamAudit
 import fcntl
 import hashlib
 import json
@@ -37,6 +38,8 @@ class VerifiedLaunch:
     courseKey: str
     instance: str
     bootstrapTarget: str
+    bindingExamId: str | None = None
+    bindingCertId: str | None = None
 
 
 SNAPSHOT = TypeAdapter(VerifiedLaunch)
@@ -165,24 +168,30 @@ class Store:
             raise LaunchError('Отклонены state, browser credential, срок или повторный запуск')
         return pending
 
-    def activate(self, state: str, binding: str, now: int, identity: Identity, registration: LaunchRegistration, course_key: str, instance: str, prefix: str) -> tuple[str, VerifiedLaunch]:
+    def activate(self, state: str, binding: str, now: int, identity: Identity, registration: LaunchRegistration,
+                 course_key: str, instance: str, prefix: str, *, binding_exam_id: str | None = None) -> tuple[str, VerifiedLaunch]:
         flow = secrets.token_urlsafe(32)
         snapshot = VerifiedLaunch(
             uid=identity['uid'], name=identity['name'], role=identity['role'], email=identity['email'],
             subject=identity['subject'], registration=registration.canonical(),
             context=identity['context'], resource=identity['resource'], activity=identity['activity'],
             targetLinkUri=registration.targetLinkUri, courseKey=course_key, instance=instance,
-            bootstrapTarget=prefix + '/bootstrap/' + flow)
+            bootstrapTarget=prefix + '/bootstrap/' + flow, bindingExamId=binding_exam_id)
+        launch_data = asdict(snapshot)
+        launch_data.pop('bindingCertId')
+        if binding_exam_id is None:
+            launch_data.pop('bindingExamId')
         with self.transaction() as db:
             self._cleanup(db, now)
             updated = db.execute('UPDATE auth_attempts SET phase=1,launch_json=?,flow_hash=?,handoff_expires=min(expires,?) '
                                  'WHERE state_hash=? AND browser_hash=? AND expires>? AND phase=0',
-                                 (json.dumps(asdict(snapshot)), digest(flow), now + 60, digest(state), digest(binding), now)).rowcount
+                                 (json.dumps(launch_data), digest(flow), now + 60, digest(state), digest(binding), now)).rowcount
             if updated != 1:
                 raise LaunchError('Повторный или устаревший LTI запуск')
         return flow, snapshot
 
-    def consume_handoff(self, flow: str, binding: str, now: int) -> Handoff:
+    def consume_handoff(self, flow: str, binding: str, now: int, *, binding_exam: ExamAudit | None = None,
+                        binding_cert_id: str | None = None) -> Handoff:
         with self.transaction() as db:
             self._cleanup(db, now)
             row = db.execute('SELECT * FROM auth_attempts WHERE flow_hash=? AND browser_hash=? AND phase=1 AND expires>? AND handoff_expires>?',
@@ -193,7 +202,11 @@ class Store:
             if value.launch_json is None:
                 raise LaunchError('Отсутствует подтверждённый snapshot')
             snapshot = SNAPSHOT.validate_json(value.launch_json, strict=True)
-            db.execute('UPDATE auth_attempts SET phase=2 WHERE state_hash=?', (value.state_hash,))
+            launch_json = value.launch_json
+            if (binding_cert_id is not None and binding_exam is not None and snapshot.role == 'student'
+                    and snapshot.bindingExamId == binding_exam.examId and snapshot.activity in binding_exam.activities):
+                launch_json = json.dumps(asdict(replace(snapshot, bindingCertId=binding_cert_id)))
+            db.execute('UPDATE auth_attempts SET phase=2,launch_json=? WHERE state_hash=?', (launch_json, value.state_hash))
         return {'uid': snapshot.uid, 'displayName': snapshot.name, 'email': snapshot.uid, 'target': snapshot.bootstrapTarget}
 
     def consume_bootstrap(self, flow: str, binding: str, now: int, registration: LaunchRegistration, course_key: str, instance: str, target: str) -> VerifiedLaunch:
@@ -209,7 +222,7 @@ class Store:
                 raise LaunchError('Отсутствует подтверждённый snapshot')
             snapshot = SNAPSHOT.validate_json(value.launch_json, strict=True)
             # Необратимый consume фиксируется до любого обращения к Bridge.
-            db.execute('UPDATE auth_attempts SET phase=3 WHERE state_hash=?', (value.state_hash,))
+            db.execute('UPDATE auth_attempts SET phase=3,launch_json=NULL WHERE state_hash=?', (value.state_hash,))
         current = registration.canonical()
         if (snapshot.registration != current or snapshot.courseKey != course_key or snapshot.instance != instance
                 or snapshot.bootstrapTarget != target):

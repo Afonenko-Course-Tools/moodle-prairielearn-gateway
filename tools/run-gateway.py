@@ -27,6 +27,8 @@ def main() -> None:
         paths=[course.database,course.handoffTokenFile,course.bridge.tokenFile]
         if course.examAudit is not None:
             paths.extend((course.examAudit.database,course.examAudit.proxyTokenFile))
+        if course.examBinding is not None:
+            paths.append(course.examBinding.tokenFile)
         for path in paths:
             if Path(path).resolve().is_relative_to(repo): p.error("Private runtime DB и tokens должны находиться вне репозитория")
     uvicorn.run(create_courses_app(config),host=args.host,port=args.port,proxy_headers=False,access_log=False,server_header=False)

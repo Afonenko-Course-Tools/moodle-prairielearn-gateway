@@ -1,8 +1,10 @@
 import time
 import re
+import unicodedata
 from joserfc import jwt
 from joserfc.jwk import KeySet
 from pydantic import BaseModel, ConfigDict, Field
+from .config import ExamAudit
 from .contracts import Clock, Identity, Jwks, LaunchRegistration, Pending
 from .store import Store, VerifiedLaunch
 from .errors import LaunchError
@@ -97,7 +99,8 @@ class LaunchService:
             raise LaunchError("Отклонена регистрация или привязка входа")
         return self.store.state(binding, int(self.clock()))
 
-    def verify(self, state: str, binding: str, encoded: str, jwks: object) -> tuple[str, VerifiedLaunch]:
+    def verify(self, state: str, binding: str, encoded: str, jwks: object, *,
+               binding_exam: ExamAudit | None = None) -> tuple[str, VerifiedLaunch]:
         now, r = int(self.clock()), self.registration
         pending = self.store.pending(state, binding, now)
         try:
@@ -124,8 +127,18 @@ class LaunchService:
             sub = c.sub
             identity_key = digest([r.issuer,r.clientId,r.deploymentId,sub])
             name = c.name
-            if not isinstance(name,str) or len(name)>256 or any(ord(v)<32 or 0xD800<=ord(v)<=0xDFFF for v in name): name="Участник Moodle"
+            if not isinstance(name,str) or len(name)>256 or any(ord(v)<32 or 0xD800<=ord(v)<=0xDFFF for v in name):
+                name = "Участник Moodle"
+                has_signed_name = False
+            else:
+                has_signed_name = ('name' in c.model_fields_set and 0 < len(name) <= 100 and name == name.strip()
+                                   and all(unicodedata.category(char)[0] != 'C' for char in name))
             identity: Identity = {"uid":"gw-"+identity_key+"@example.invalid","subject":sub,"name":name,"role":"teacher" if INSTRUCTOR in roles else "student","context":r.contextId,"resource":resource,"activity":activity,"email":verified_email(c)}
         except LaunchError: raise
         except Exception as error: raise LaunchError("Отклонены подпись или LTI claims") from error
-        return self.store.activate(state, binding, now, identity, r, self.course_key, self.instance, self.prefix)
+        binding_exam_id = None
+        if (binding_exam is not None and has_signed_name and identity['role'] == 'student'
+                and activity in binding_exam.activities):
+            binding_exam_id = binding_exam.examId
+        return self.store.activate(state, binding, now, identity, r, self.course_key, self.instance, self.prefix,
+                                   binding_exam_id=binding_exam_id)
