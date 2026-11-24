@@ -131,7 +131,7 @@ class LaunchService:
                 name = "Участник Moodle"
                 has_signed_name = False
             else:
-                has_signed_name = ('name' in c.model_fields_set and 0 < len(name) <= 100 and name == name.strip()
+                has_signed_name = ('name' in c.model_fields_set and bool(name) and name == name.strip()
                                    and all(unicodedata.category(char)[0] != 'C' for char in name))
             identity: Identity = {"uid":"gw-"+identity_key+"@example.invalid","subject":sub,"name":name,"role":"teacher" if INSTRUCTOR in roles else "student","context":r.contextId,"resource":resource,"activity":activity,"email":verified_email(c)}
         except LaunchError: raise

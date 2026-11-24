@@ -52,7 +52,8 @@ async def private_handoff(browser: httpx.AsyncClient, flow: str,
 
 
 @pytest.mark.anyio
-async def test_reports_only_after_enrollment_and_one_shot_handoff(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.parametrize('name', [NAME, 'А' * 256])
+async def test_reports_only_after_enrollment_and_one_shot_handoff(tmp_path: Path, caplog: pytest.LogCaptureFixture, name: str) -> None:
     platform = Platform()
     sent: list[httpx.Request] = []
 
@@ -65,7 +66,7 @@ async def test_reports_only_after_enrollment_and_one_shot_handoff(tmp_path: Path
                      binding_transport=httpx.MockTransport(receiver))
     app.state.handoff_secret = 'h' * 32
     async with app.router.lifespan_context(app), browser_for(app) as browser:
-        _, launch_response, flow = await activate(browser, platform, name=NAME)
+        _, launch_response, flow = await activate(browser, platform, name=name)
         assert launch_response.headers['location'] == EXAM_ORIGIN + PREFIX + '/pl/' + flow
         assert (await private_handoff(browser, flow, auth='forged')).status_code == 403
         handoff = await private_handoff(browser, flow)
@@ -81,7 +82,7 @@ async def test_reports_only_after_enrollment_and_one_shot_handoff(tmp_path: Path
     assert req.method == 'POST' and str(req.url) == RECEIVER
     assert req.headers['authorization'] == 'Bearer ' + TOKEN
     assert req.headers['content-type'] == 'application/json'
-    assert json.loads(req.content) == {'examId': EXAM_ID, 'certId': CERT_ID, 'uid': UID, 'student': NAME}
+    assert json.loads(req.content) == {'examId': EXAM_ID, 'certId': CERT_ID, 'uid': UID, 'student': name}
     assert not [record for record in caplog.records if record.name == 'gateway.binding']
 
 
@@ -106,7 +107,7 @@ async def test_no_report_without_proof_scope_and_successful_bridge(tmp_path: Pat
     app.state.handoff_secret = 'h' * 32
     async with app.router.lifespan_context(app), browser_for(app) as browser:
         role = INSTRUCTOR if case == 'teacher' else LEARNER
-        names = {'blank_name': ' ', 'long_name': 'А' * 101, 'format_name': 'А\u200dБ'}
+        names = {'blank_name': ' ', 'long_name': 'А' * 257, 'format_name': 'А\u200dБ'}
         _, launch_response, flow = await activate(browser, platform, role=role, name=names.get(case, NAME))
         prefix = '' if case in {'unscoped', 'teacher'} or case in names else EXAM_ORIGIN
         assert launch_response.headers['location'] == prefix + PREFIX + '/pl/' + flow
